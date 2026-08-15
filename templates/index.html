@@ -1,0 +1,152 @@
+<!-- templates/index.html -->
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOCACOMVI - Deteksi Kedipan Mata</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e2f;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #4da6ff;
+            margin-bottom: 5px;
+        }
+        p.subtitle {
+            color: #a0a0b0;
+            margin-bottom: 20px;
+        }
+        .dashboard-container {
+            display: flex;
+            gap: 30px;
+            max-width: 1200px;
+            width: 100%;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .video-container {
+            background-color: #2a2a40;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        img {
+            max-width: 100%;
+            border-radius: 8px;
+            border: 2px solid #4da6ff;
+        }
+        .metrics-container {
+            background-color: #2a2a40;
+            padding: 20px;
+            border-radius: 10px;
+            min-width: 300px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .metric-card {
+            background-color: #353550;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 5px solid #4da6ff;
+        }
+        .metric-card.warning {
+            border-left-color: #ff4d4d;
+        }
+        .metric-title {
+            font-size: 0.9em;
+            color: #a0a0b0;
+            margin: 0 0 5px 0;
+            text-transform: uppercase;
+        }
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 0;
+        }
+        .json-view {
+            background-color: #151520;
+            color: #a6e22e;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            font-size: 0.85em;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>SOCACOMVI Dashboard</h1>
+    <p class="subtitle">Real-time Eye Blink Detection & API Output</p>
+
+    <div class="dashboard-container">
+        <!-- Panel Kiri: Video Stream -->
+        <div class="video-container">
+            <h2>Kamera Langsung</h2>
+            <!-- Tag gambar ini akan terus-menerus memuat aliran MJPEG dari server -->
+            <img src="/video_feed" alt="Video Stream Tidak Tersedia">
+        </div>
+
+        <!-- Panel Kanan: Data Metrik JSON -->
+        <div class="metrics-container">
+            <h2>Metrik API <code>/api/features</code></h2>
+            
+            <div class="metric-card" id="status-card">
+                <p class="metric-title">Status Mata Saat Ini</p>
+                <p class="metric-value" id="eye-status">Loading...</p>
+            </div>
+
+            <div class="metric-card">
+                <p class="metric-title">Total Kedipan / EAR</p>
+                <p class="metric-value"><span id="blink-count">0</span> <span style="font-size:0.5em; color:#a0a0b0">| EAR: <span id="ear-value">0.00</span></span></p>
+            </div>
+
+            <h4>Raw JSON Response:</h4>
+            <div class="json-view" id="json-output">
+Menunggu data dari API...
+            </div>
+        </div>
+    </div>
+
+    <!-- Script untuk menarik data dari API setiap 500 milidetik -->
+    <script>
+        function fetchMetrics() {
+            fetch('/api/features')
+                .then(response => response.json())
+                .then(data => {
+                    // Update tampilan teks JSON
+                    document.getElementById('json-output').innerText = JSON.stringify(data, null, 2);
+                    
+                    // Update tampilan Card UI
+                    document.getElementById('eye-status').innerText = data.eye_status;
+                    document.getElementById('blink-count').innerText = data.blink_count;
+                    document.getElementById('ear-value').innerText = data.ear.toFixed(3);
+
+                    // Ubah warna card menjadi merah jika mata tertutup
+                    const statusCard = document.getElementById('status-card');
+                    if (data.eye_status === "Closed") {
+                        statusCard.classList.add('warning');
+                        statusCard.style.borderLeftColor = "#ff4d4d";
+                    } else {
+                        statusCard.classList.remove('warning');
+                        statusCard.style.borderLeftColor = "#4da6ff";
+                    }
+                })
+                .catch(error => console.error('Gagal mengambil data metrik:', error));
+        }
+
+        // Panggil fungsi secara berulang setiap setengah detik (500ms)
+        setInterval(fetchMetrics, 500);
+    </script>
+</body>
+</html>

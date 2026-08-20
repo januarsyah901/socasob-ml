@@ -32,6 +32,12 @@ EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", 0.20))
 CONSEC_FRAMES = int(os.getenv("CONSEC_FRAMES", 3))
 
 # ==========================================
+# Backend Socket.io Connection
+# ==========================================
+# URL Backend Node.js yang akan menerima data dari ML
+BE_URL = os.getenv("BE_URL", "http://localhost:3001")
+
+# ==========================================
 # Logging Configuration
 # ==========================================
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

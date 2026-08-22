@@ -138,9 +138,18 @@ def video_feed():
 
 @app.route('/api/features', methods=['GET'])
 def api_features():
-    """Endpoint debug JSON — menampilkan fitur terakhir yang diekstrak."""
+    """
+    Endpoint debug JSON — menampilkan fitur terakhir yang diekstrak dari pipeline CV.
+    Mengembalikan 404 jika belum ada robot yang connect dan mengirim frame.
+    """
     data = feature_store.get()
-    return jsonify(data)
+    if data is None:
+        return jsonify({
+            "success": False,
+            "error": "Belum ada data fitur. Robot belum connect atau belum ada frame yang diproses.",
+            "hint": "Kirim frame via WebSocket (robot-frame) atau POST /api/frame terlebih dahulu."
+        }), 404
+    return jsonify({"success": True, "data": data})
 
 @app.route('/api/frame', methods=['POST'])
 def api_send_frame():

@@ -2,6 +2,15 @@
 
 Vision pipeline SocaSob — Flask + MediaPipe. Deteksi kedipan, EAR, stream MJPEG. Deploy via CapRover.
 
+---
+
+### 🌐 Live Production Deployment
+- **URL Publik ML Service**: [socasob-ml.hallojanu.xyz](https://socasob-ml.hallojanu.xyz) (Status: 🟡 Active - gthread/eventlet initializing)
+- **Frontend App**: [socasob.hallojanu.xyz](https://socasob.hallojanu.xyz)
+- **Backend API**: [be-socasob.hallojanu.xyz](https://be-socasob.hallojanu.xyz)
+
+---
+
 ## Endpoints
 
 | Method | Path | Deskripsi |

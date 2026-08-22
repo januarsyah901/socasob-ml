@@ -70,7 +70,7 @@ class BackendSocketClient:
                 logger.info(f"[BE Client] Menghubungkan ke {settings.BE_URL} ...")
                 self._sio.connect(
                     settings.BE_URL,
-                    transports=['websocket'],
+                    transports=['websocket', 'polling'],
                     wait_timeout=10
                 )
                 self._sio.wait()  # Blokir thread ini agar koneksi tetap hidup

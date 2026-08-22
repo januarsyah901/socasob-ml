@@ -56,8 +56,7 @@ feature_store = FeatureStore()
 stream_service = StreamService(pipeline_service)
 
 # ==========================================
-# 3. Background Worker: Sync ke FeatureStore
-#    (untuk endpoint /api/features debug)
+# 3. Background Worker & Services Initialization
 # ==========================================
 def sync_features():
     """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug."""
@@ -67,6 +66,29 @@ def sync_features():
         if features:
             feature_store.update(features)
         time.sleep(0.03)  # ~30ms
+
+def start_background_services():
+    """Memulai semua thread dan koneksi background (BE socket, aggregator, pipeline CV)."""
+    import threading
+    logger.info("=== Memulai SocaSob ML Background Services ===")
+
+    # 1. Mulai koneksi ke Backend (async, tidak blocking)
+    be_client.connect_async()
+
+    # 2. Mulai aggregator (background timer 60 detik)
+    aggregator.start()
+
+    # 3. Mulai vision pipeline (background thread CV)
+    pipeline_service.start()
+
+    # 4. Mulai sync feature store (background thread)
+    sync_thread = threading.Thread(target=sync_features, daemon=True, name="feature-sync")
+    sync_thread.start()
+
+    logger.info(f"ML akan push data ke BE di {settings.BE_URL}")
+
+# Jalankan background services saat module dimuat (kompatibel dengan Gunicorn & direct execution)
+start_background_services()
 
 # ==========================================
 # 4. WebSocket Event Handlers (Robot → ML)
@@ -282,27 +304,11 @@ def api_config():
         }), 200
 
 # ==========================================
-# 6. Entry Point — Menjalankan Semua Service
+# 6. Entry Point — Menjalankan Server (Direct Run)
 # ==========================================
 if __name__ == '__main__':
-    logger.info("=== Memulai SocaSob ML Server ===")
-
-    # Mulai koneksi ke Backend (async, tidak blocking)
-    be_client.connect_async()
-
-    # Mulai aggregator (background timer 60 detik)
-    aggregator.start()
-
-    # Mulai vision pipeline (background thread CV)
-    pipeline_service.start()
-
-    # Mulai sync feature store (background thread)
-    import threading
-    sync_thread = threading.Thread(target=sync_features, daemon=True, name="feature-sync")
-    sync_thread.start()
-
+    logger.info("=== Memulai SocaSob ML Server (Direct Execution) ===")
     logger.info(f"Server siap. Robot dapat connect ke ws://0.0.0.0:{settings.FLASK_PORT}")
-    logger.info(f"ML akan push data ke BE di {settings.BE_URL}")
 
     # Jalankan Flask-SocketIO server (mendengarkan koneksi dari Robot)
     socketio.run(

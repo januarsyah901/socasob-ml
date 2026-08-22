@@ -182,16 +182,13 @@ def api_send_frame():
             if 'frame' in request.files:
                 frame_bytes = request.files['frame'].read()
 
-        # Jika tidak ada frame binary, buat synthetic dummy frame untuk kemudahan testing
+        # Frame wajib ada — tidak boleh dibuat-buat secara sintetis
         if not frame_bytes:
-            import numpy as np
-            import cv2
-            img = np.zeros((240, 320, 3), dtype=np.uint8)
-            color = (60, 60, 200) if distance == "Dekat" else (200, 100, 60)
-            img[:] = color
-            cv2.putText(img, distance.upper(), (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-            _, buf = cv2.imencode('.jpg', img)
-            frame_bytes = buf.tobytes()
+            return jsonify({
+                "success": False,
+                "error": "Frame gambar wajib dikirim. Gunakan field 'frame' (multipart) atau 'frame_base64' (JSON).",
+                "hint": "Kirim file JPEG via multipart/form-data dengan field name 'frame'."
+            }), 400
 
         distance_payload = {"distance": distance, "confidence": confidence}
 

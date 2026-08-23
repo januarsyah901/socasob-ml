@@ -22,6 +22,7 @@ from services.aggregator_service import AggregatorService
 from services.vision_pipeline_service import VisionPipelineService
 from services.feature_store import FeatureStore
 from services.stream_service import StreamService
+from services.robot_validator import is_robot_registered
 from config import settings
 from utils.logger import get_logger
 
@@ -126,6 +127,11 @@ def on_robot_frame(data):
         logger.warning("Payload robot-frame tidak valid. Diabaikan.")
         return
 
+    # Security Gate: Validasi apakah robot terdaftar di sistem
+    if not is_robot_registered(robot_id):
+        logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
+        return
+
     # Teruskan ke handler (frame-dropping terjadi di sini)
     robot_ws_handler.on_robot_frame(
         robot_id=robot_id,
@@ -211,6 +217,13 @@ def api_send_frame():
                 "error": "Frame gambar wajib dikirim. Gunakan field 'frame' (multipart) atau 'frame_base64' (JSON).",
                 "hint": "Kirim file JPEG via multipart/form-data dengan field name 'frame'."
             }), 400
+
+        # Security Gate: Validasi apakah robot terdaftar di sistem
+        if not is_robot_registered(robot_id):
+            return jsonify({
+                "success": False,
+                "error": f"Robot ID '{robot_id}' tidak terdaftar atau sedang inaktif. Silakan daftarkan perangkat di Dashboard terlebih dahulu."
+            }), 403
 
         distance_payload = {"distance": distance, "confidence": confidence}
 

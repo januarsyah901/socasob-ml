@@ -362,5 +362,6 @@ if __name__ == '__main__':
         host=settings.FLASK_HOST,
         port=settings.FLASK_PORT,
         debug=False,
-        use_reloader=False
+        use_reloader=False,
+        allow_unsafe_werkzeug=True
     )

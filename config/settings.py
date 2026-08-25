@@ -17,6 +17,7 @@ VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "webcam")
 
 # URL untuk ESP32-CAM (Jika VIDEO_SOURCE = 'esp32')
 ESP32_STREAM_URL = os.getenv("ESP32_STREAM_URL", "http://192.168.1.100:81/stream")
+ESP32_CAM_URL = os.getenv("ESP32_CAM_URL", ESP32_STREAM_URL)
 
 # Index untuk Webcam (Jika VIDEO_SOURCE = 'webcam')
 WEBCAM_INDEX = int(os.getenv("WEBCAM_INDEX", 0))

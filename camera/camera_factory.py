@@ -32,10 +32,8 @@ class CameraFactory:
             
         elif source == "esp32":
             logger.info("Factory memilih ESP32Camera sebagai sumber video.")
-            # TODO: Di-uncomment saat esp32_camera.py sudah diimplementasikan di akhir
-            # from camera.esp32_camera import ESP32Camera
-            # return ESP32Camera(stream_url=settings.ESP32_STREAM_URL)
-            raise NotImplementedError("ESP32Camera belum diimplementasikan. Gunakan 'webcam' di config.")
+            from camera.esp32_camera import ESP32Camera
+            return ESP32Camera(stream_url=settings.ESP32_STREAM_URL)
             
         else:
             logger.error(f"VIDEO_SOURCE tidak dikenal: {source}. Fallback ke WebcamCamera.")

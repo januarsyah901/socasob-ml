@@ -139,6 +139,35 @@ def on_robot_frame(data):
         distance_json=distance_json
     )
 
+@socketio.on('esp32_frame')
+def on_esp32_frame(data):
+    """
+    Menerima frame binary atau dict dari ESP32-CAM via event esp32_frame.
+    """
+    frame_bytes = data.get('frame') if isinstance(data, dict) else data
+    robot_id = data.get('robot_id', 'fadfa566') if isinstance(data, dict) else 'fadfa566'
+    distance_json = data.get('distance_json', {}) if isinstance(data, dict) else {}
+
+    if not isinstance(frame_bytes, (bytes, bytearray, memoryview)):
+        return
+
+    if not is_robot_registered(robot_id):
+        logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar.")
+        return
+
+    robot_ws_handler.on_robot_frame(
+        robot_id=robot_id,
+        frame_bytes=bytes(frame_bytes),
+        distance_json=distance_json
+    )
+
+@socketio.on('request_telemetry')
+def on_request_telemetry():
+    """Mengirim telemetry terakhir ke client Socket.IO."""
+    data = feature_store.get()
+    if data:
+        socketio.emit('telemetry', data)
+
 # ==========================================
 # 5. HTTP Routes (Debug & Health)
 # ==========================================

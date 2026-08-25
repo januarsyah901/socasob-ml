@@ -72,6 +72,18 @@ class RobotWebSocketHandler:
 
         logger.debug(f"[{robot_id}] Frame diterima. distance={distance_json.get('distance')}")
 
+    def on_frame_array(self, robot_id: str, frame: np.ndarray, distance_json: dict = None) -> None:
+        """
+        Menyimpan frame numpy array yang sudah terdecode (misal dari raw websocket / camera service).
+        """
+        if frame is None or frame.size == 0:
+            return
+        with self.lock:
+            self._pending_frame = frame
+            self._pending_distance_json = distance_json or {}
+            self._pending_robot_id = robot_id
+            self._has_pending.set()
+
     def get_pending(self) -> tuple[str | None, np.ndarray | None, dict | None]:
         """
         Mengambil frame + data terbaru yang menunggu untuk diproses.

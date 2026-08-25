@@ -42,6 +42,14 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'socasob-ml-secret')
 # SocketIO server di sisi ML — Robot connect ke sini
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 
+try:
+    from flask_sock import Sock
+    sock = Sock(app)
+except ImportError:
+    sock = None
+
+from camera.esp32_camera import decode_websocket_packet
+
 # ==========================================
 # 2. Inisialisasi Semua Komponen (Services)
 # ==========================================
@@ -171,6 +179,48 @@ def on_request_telemetry():
     data = feature_store.get()
     if data:
         socketio.emit('telemetry', data)
+
+# ==========================================
+# 4b. Raw WebSocket Handlers (ESP32-CAM via /ws)
+# ==========================================
+if sock is not None:
+    def _handle_esp32_raw_websocket(ws):
+        logger.info("ESP32-CAM raw WebSocket terhubung.")
+        try:
+            while True:
+                message = ws.receive()
+                if message is None:
+                    break
+                if not isinstance(message, (bytes, bytearray, memoryview)):
+                    continue
+
+                packet = bytes(message)
+                decoded = decode_websocket_packet(packet, 16)
+                if decoded is None:
+                    continue
+
+                device_id, frame = decoded
+                robot_id = device_id if device_id and device_id != "UNKNOWN" else "fadfa566"
+
+                # Validasi security jika robot terdaftar
+                if not is_robot_registered(robot_id):
+                    continue
+
+                robot_ws_handler.on_frame_array(
+                    robot_id=robot_id,
+                    frame=frame,
+                    distance_json={"distance": "Dekat", "confidence": 95}
+                )
+        except Exception as error:
+            logger.info(f"ESP32-CAM raw WebSocket terputus: {error}")
+
+    @sock.route('/ws')
+    def handle_esp32_ws(ws):
+        _handle_esp32_raw_websocket(ws)
+
+    @sock.route('/ws/esp32')
+    def handle_esp32_ws_legacy(ws):
+        _handle_esp32_raw_websocket(ws)
 
 # ==========================================
 # 5. HTTP Routes (Debug & Health)

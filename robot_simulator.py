@@ -91,14 +91,14 @@ class RobotSimulator:
             self.distance = "Dekat" if self.distance == "Jauh" else "Jauh"
             self.confidence = random.randint(88, 98)
             self._last_toggle = now
-            print(f"  [Sim] ↕ Jarak berubah → {self.distance} (confidence={self.confidence})")
+            print(f"  [Sim] <> Jarak berubah -> {self.distance} (confidence={self.confidence})")
 
     def _send_loop(self, sio):
         """Loop utama pengiriman frame ke ML via Socket.io."""
         print(f"\n[Sim] Mulai kirim frame ke ML @ {self.fps} fps...")
         print(f"[Sim] Robot ID : {self.robot_id}")
         print(f"[Sim] ML URL   : {self.ml_url}")
-        print(f"[Sim] Durasi   : {'∞' if self.duration == 0 else f'{self.duration} detik'}")
+        print(f"[Sim] Durasi   : {'Inf' if self.duration == 0 else f'{self.duration} detik'}")
         print("-" * 50)
 
         self.start_time = time.time()
@@ -135,7 +135,7 @@ class RobotSimulator:
                     print(f"  [Sim] Frame #{self.frame_count:04d} | t={elapsed:.1f}s | {self.distance} ({self.confidence}%)")
 
             except Exception as e:
-                print(f"  [Sim] ⚠ Gagal kirim frame: {e}")
+                print(f"  [Sim] [!] Gagal kirim frame: {e}")
 
             # Jaga interval
             elapsed_loop = time.time() - loop_start
@@ -151,24 +151,24 @@ class RobotSimulator:
         self.running = True
 
         @sio.event
-        def connect():
-            print(f"[Sim] ✅ Terhubung ke ML Server ({self.ml_url})")
+        def connect(*args, **kwargs):
+            print(f"[Sim] [OK] Terhubung ke ML Server ({self.ml_url})")
             send_thread = threading.Thread(target=self._send_loop, args=(sio,), daemon=True)
             send_thread.start()
 
         @sio.event
-        def disconnect():
-            print("[Sim] ❌ Terputus dari ML Server.")
+        def disconnect(*args, **kwargs):
+            print("[Sim] [X] Terputus dari ML Server.")
             self.running = False
 
         @sio.event
-        def connect_error(data):
-            print(f"[Sim] ❌ Gagal connect: {data}")
+        def connect_error(*args, **kwargs):
+            print(f"[Sim] [X] Gagal connect: {args}")
             self.running = False
 
         print(f"[Sim] Menghubungkan ke ML Server di {self.ml_url} ...")
         try:
-            sio.connect(self.ml_url, transports=["websocket"])
+            sio.connect(self.ml_url, transports=["polling", "websocket"])
             sio.wait()
         except KeyboardInterrupt:
             print("\n[Sim] Dihentikan oleh user (Ctrl+C).")

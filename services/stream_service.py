@@ -45,14 +45,16 @@ class StreamService:
             if frame is None:
                 # Jika belum ada frame dari kamera, berikan jeda singkat 
                 # agar CPU tidak bekerja 100% untuk perulangan kosong.
-                time.sleep(0.01)
+                time.sleep(0.02)
                 continue
                 
             # Mengonversi (encode) matriks gambar BGR OpenCV menjadi format JPEG
-            success, buffer = cv2.imencode('.jpg', frame)
+            # Menggunakan quality 75 agar bandwidth ringan dan tidak membebani buffer
+            success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             
             if not success:
                 logger.error("Gagal melakukan encoding frame ke format JPEG.")
+                time.sleep(0.02)
                 continue
                 
             # Mengubah buffer memori menjadi deretan bytes mentah
@@ -61,3 +63,6 @@ class StreamService:
             # Menghasilkan output yang dibungkus dengan boundary standar MJPEG HTTP
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            # Rate limit streaming ke ~30 FPS untuk mencegah buffer bloat di browser/jaringan
+            time.sleep(0.033)

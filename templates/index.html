@@ -107,8 +107,23 @@
             </div>
 
             <div class="metric-card">
-                <p class="metric-title">Total Kedipan / EAR</p>
+                <p class="metric-title">Total Kedipan / EAR Saat Ini</p>
                 <p class="metric-value"><span id="blink-count">0</span> <span style="font-size:0.5em; color:#a0a0b0">| EAR: <span id="ear-value">0.00</span></span></p>
+                <div style="margin-top: 10px; background: #222233; height: 10px; border-radius: 5px; overflow: hidden; position: relative;">
+                    <div id="ear-bar" style="width: 0%; height: 100%; background: #4da6ff; transition: width 0.1s ease;"></div>
+                </div>
+            </div>
+
+            <!-- Kalibrasi Sensitivitas EAR -->
+            <div class="metric-card" style="border-left-color: #f39c12;">
+                <p class="metric-title">⚙️ Sensitivitas EAR Threshold</p>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">
+                    <input type="range" id="threshold-slider" min="0.15" max="0.35" step="0.01" value="0.23" style="width: 70%; cursor: pointer;" oninput="updateSliderLabel(this.value)" onchange="saveThreshold(this.value)">
+                    <span id="threshold-label" style="font-weight: bold; font-size: 1.2em; color: #f39c12;">0.23</span>
+                </div>
+                <p style="font-size: 0.75em; color: #a0a0b0; margin-top: 6px;">
+                    *Jika kedipan belum terdeteksi, <b>geser ke kanan</b> (misal 0.24 - 0.26).
+                </p>
             </div>
 
             <h4>Raw JSON Response:</h4>
@@ -120,26 +135,66 @@ Menunggu data dari API...
 
     <!-- Script untuk menarik data dari API setiap 500 milidetik -->
     <script>
+        let currentThreshold = 0.23;
+
+        // Ambil konfigurasi threshold saat ini
+        fetch('/api/config')
+            .then(res => res.json())
+            .then(res => {
+                if (res.data && res.data.ear_threshold) {
+                    currentThreshold = res.data.ear_threshold;
+                    document.getElementById('threshold-slider').value = currentThreshold;
+                    document.getElementById('threshold-label').innerText = currentThreshold.toFixed(2);
+                }
+            }).catch(console.error);
+
+        function updateSliderLabel(val) {
+            document.getElementById('threshold-label').innerText = parseFloat(val).toFixed(2);
+        }
+
+        function saveThreshold(val) {
+            currentThreshold = parseFloat(val);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ear_threshold: currentThreshold })
+            }).then(r => r.json()).then(d => {
+                console.log('Threshold updated:', d);
+            }).catch(console.error);
+        }
+
         function fetchMetrics() {
             fetch('/api/features')
                 .then(response => response.json())
-                .then(data => {
+                .then(res => {
+                    const data = res.data || res;
+                    if (!data) return;
+
                     // Update tampilan teks JSON
-                    document.getElementById('json-output').innerText = JSON.stringify(data, null, 2);
+                    document.getElementById('json-output').innerText = JSON.stringify(res, null, 2);
                     
                     // Update tampilan Card UI
-                    document.getElementById('eye-status').innerText = data.eye_status;
-                    document.getElementById('blink-count').innerText = data.blink_count;
-                    document.getElementById('ear-value').innerText = data.ear.toFixed(3);
+                    document.getElementById('eye-status').innerText = data.eye_status || "N/A";
+                    document.getElementById('blink-count').innerText = data.blink_count ?? 0;
+                    
+                    const ear = Number(data.ear || 0);
+                    document.getElementById('ear-value').innerText = ear.toFixed(3);
 
-                    // Ubah warna card menjadi merah jika mata tertutup
+                    // Update bar visualisasi EAR (skala 0.0 s.d 0.40 -> 0% s.d 100%)
+                    const pct = Math.min(Math.max((ear / 0.40) * 100, 0), 100);
+                    const bar = document.getElementById('ear-bar');
+                    bar.style.width = pct + '%';
+
+                    // Ubah warna card & bar menjadi merah jika mata tertutup
                     const statusCard = document.getElementById('status-card');
                     if (data.eye_status === "Closed") {
                         statusCard.classList.add('warning');
                         statusCard.style.borderLeftColor = "#ff4d4d";
+                        bar.style.background = "#ff4d4d";
                     } else {
                         statusCard.classList.remove('warning');
                         statusCard.style.borderLeftColor = "#4da6ff";
+                        bar.style.background = "#4da6ff";
                     }
                 })
                 .catch(error => console.error('Gagal mengambil data metrik:', error));

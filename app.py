@@ -108,16 +108,16 @@ start_background_services()
 # ==========================================
 
 @socketio.on('connect')
-def on_robot_connect():
+def on_robot_connect(*args, **kwargs):
     """Dipanggil saat Robot berhasil connect via WebSocket."""
-    from flask_socketio import request as ws_request
-    logger.info(f"Robot terhubung: sid={ws_request.sid}")
+    sid = getattr(request, 'sid', 'unknown')
+    logger.info(f"Robot terhubung: sid={sid}")
 
 @socketio.on('disconnect')
-def on_robot_disconnect():
+def on_robot_disconnect(*args, **kwargs):
     """Dipanggil saat Robot disconnect."""
-    from flask_socketio import request as ws_request
-    logger.info(f"Robot terputus: sid={ws_request.sid}")
+    sid = getattr(request, 'sid', 'unknown')
+    logger.info(f"Robot terputus: sid={sid}")
 
 @socketio.on('robot-frame')
 def on_robot_frame(data):

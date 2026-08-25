@@ -36,18 +36,21 @@ class BlinkDetector:
                 - str: Status mata saat ini ("Open" atau "Closed").
                 - bool: True jika satu event kedipan penuh baru saja selesai, False jika tidak.
         """
+        threshold = getattr(settings, 'EAR_THRESHOLD', self.ear_threshold)
+        consec = getattr(settings, 'CONSEC_FRAMES', self.consec_frames)
+        
         blink_event = False
 
         # Jika EAR di bawah threshold, berarti mata sedang tertutup
-        if ear < self.ear_threshold:
+        if ear < threshold:
             self.frame_counter += 1
             self.eye_status = "Closed"
             
         # Jika EAR di atas threshold, berarti mata terbuka
         else:
-            # Jika sebelumnya mata tertutup selama durasi yang cukup panjang (>= CONSEC_FRAMES),
+            # Jika sebelumnya mata tertutup selama durasi yang cukup panjang (>= consec),
             # maka catat ini sebagai satu kedipan (blink) yang valid.
-            if self.frame_counter >= self.consec_frames:
+            if self.frame_counter >= consec:
                 blink_event = True
                 
             # Reset counter karena mata sudah terbuka kembali

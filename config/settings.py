@@ -26,11 +26,11 @@ WEBCAM_INDEX = int(os.getenv("WEBCAM_INDEX", 0))
 # Computer Vision / Eye Health Parameters
 # ==========================================
 # Threshold untuk Eye Aspect Ratio (EAR) yang dianggap "mata tertutup"
-EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", 0.20))
+EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", 0.23))
 
 # Jumlah frame berturut-turut di mana EAR harus di bawah threshold 
-# untuk dianggap sebagai kedipan (blink) yang valid
-CONSEC_FRAMES = int(os.getenv("CONSEC_FRAMES", 3))
+# untuk dianggap sebagai kedipan (blink) yang valid (1-2 frame untuk responsive detection)
+CONSEC_FRAMES = int(os.getenv("CONSEC_FRAMES", 1))
 
 # ==========================================
 # Backend Socket.io Connection

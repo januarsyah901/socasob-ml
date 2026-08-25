@@ -7,8 +7,12 @@
 #   - VisionPipelineService sebagai mesin CV
 #   - AggregatorService sebagai penghitung statistik 1 menit
 
-import eventlet
-eventlet.monkey_patch()  # Harus sebelum import lain agar async berjalan
+try:
+    import eventlet
+    eventlet.monkey_patch()  # Harus sebelum import lain agar async berjalan di Linux/Gunicorn
+    ASYNC_MODE = 'eventlet'
+except ImportError:
+    ASYNC_MODE = 'threading'
 
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
@@ -36,7 +40,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'socasob-ml-secret')
 
 # SocketIO server di sisi ML — Robot connect ke sini
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 
 # ==========================================
 # 2. Inisialisasi Semua Komponen (Services)

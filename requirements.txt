@@ -6,4 +6,4 @@ gunicorn==21.2.0
 flask-socketio==5.3.6
 python-socketio[client]==5.11.0
 eventlet==0.35.2
-websockets>=12.0
+websockets>=12.0flask-sock==0.7.0

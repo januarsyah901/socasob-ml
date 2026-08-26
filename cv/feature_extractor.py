@@ -4,23 +4,30 @@ from typing import Dict, Any, Optional
 
 class FeatureExtractor:
     """
-    Menyatukan seluruh hasil ekstraksi fitur menjadi satu payload dict.
+    Menyatukan seluruh hasil ekstraksi fitur menjadi satu payload dict yang komprehensif.
     
-    Kelas ini menyimpan state terakhir yang valid. Jika wajah tidak terdeteksi
-    pada frame tertentu, kelas ini akan tetap mengembalikan struktur JSON yang utuh
-    menggunakan nilai-nilai terakhir yang diketahui agar konsumen API tidak mengalami crash.
+    Menyimpan state terakhir yang valid agar jika wajah/landmark sempat hilang sesaat,
+    struktur JSON tetap konsisten dan aman untuk API konsumen.
     """
 
     def __init__(self):
         """
-        Inisialisasi state awal (default) untuk payload API.
+        Inisialisasi state default untuk payload API.
         """
         self.last_state: Dict[str, Any] = {
             "ear": 0.0,
             "eye_status": "Open",
             "blink_count": 0,
+            "lifetime_blinks": 0,
             "blink_rate": 0.0,
+            "raw_blink_rate": 0.0,
             "eye_closure_duration": 0.0,
+            "perclos": 0.0,
+            "composite_score": 0.0,
+            "avg_blink_duration": 0.0,
+            "interval_variability": 0.0,
+            "data_quality": 1.0,
+            "system_status": "Aman",
             "fps": 0.0,
             "timestamp": "",
             "face_detected": False
@@ -33,31 +40,23 @@ class FeatureExtractor:
                       ear: Optional[float] = None, 
                       eye_status: Optional[str] = None, 
                       blink_count: Optional[int] = None, 
+                      lifetime_blinks: Optional[int] = None,
                       blink_rate: Optional[float] = None, 
-                      closure_duration: Optional[float] = None) -> Dict[str, Any]:
+                      raw_blink_rate: Optional[float] = None,
+                      closure_duration: Optional[float] = None,
+                      perclos: Optional[float] = None,
+                      composite_score: Optional[float] = None,
+                      avg_blink_duration: Optional[float] = None,
+                      interval_variability: Optional[float] = None,
+                      data_quality: Optional[float] = None,
+                      system_status: Optional[str] = None) -> Dict[str, Any]:
         """
-        Membangun payload dictionary sesuai dengan kontrak API akhir.
-
-        Args:
-            face_detected (bool): Apakah wajah ditemukan pada frame ini.
-            timestamp (str): Waktu saat ini (ISO 8601).
-            fps (float): Frame rate saat ini.
-            ear (Optional[float]): Nilai EAR terbaru.
-            eye_status (Optional[str]): Status mata terbaru.
-            blink_count (Optional[int]): Total kedipan.
-            blink_rate (Optional[float]): Laju kedipan per menit.
-            closure_duration (Optional[float]): Durasi mata tertutup.
-
-        Returns:
-            Dict[str, Any]: Dictionary lengkap sesuai kontrak '/api/features'.
+        Membangun payload dictionary lengkap sesuai dengan kontrak '/api/features'.
         """
-        
-        # Selalu perbarui flag deteksi, waktu, dan fps (karena ini independen dari wajah)
         self.last_state["face_detected"] = face_detected
         self.last_state["timestamp"] = timestamp
         self.last_state["fps"] = fps
 
-        # Hanya perbarui metrik mata jika wajah terdeteksi
         if face_detected:
             if ear is not None:
                 self.last_state["ear"] = ear
@@ -65,11 +64,25 @@ class FeatureExtractor:
                 self.last_state["eye_status"] = eye_status
             if blink_count is not None:
                 self.last_state["blink_count"] = blink_count
+            if lifetime_blinks is not None:
+                self.last_state["lifetime_blinks"] = lifetime_blinks
             if blink_rate is not None:
                 self.last_state["blink_rate"] = blink_rate
+            if raw_blink_rate is not None:
+                self.last_state["raw_blink_rate"] = raw_blink_rate
             if closure_duration is not None:
                 self.last_state["eye_closure_duration"] = closure_duration
+            if perclos is not None:
+                self.last_state["perclos"] = perclos
+            if composite_score is not None:
+                self.last_state["composite_score"] = composite_score
+            if avg_blink_duration is not None:
+                self.last_state["avg_blink_duration"] = avg_blink_duration
+            if interval_variability is not None:
+                self.last_state["interval_variability"] = interval_variability
+            if data_quality is not None:
+                self.last_state["data_quality"] = data_quality
+            if system_status is not None:
+                self.last_state["system_status"] = system_status
 
-        # Mengembalikan salinan (copy) dictionary untuk menghindari masalah mutasi 
-        # referensi jika diakses oleh thread lain nantinya.
         return self.last_state.copy()

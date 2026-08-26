@@ -187,24 +187,45 @@ if sock is not None:
     def _handle_esp32_raw_websocket(ws):
         logger.info("ESP32-CAM raw WebSocket terhubung.")
         try:
+            # Kirim handshake response awal begitu terhubung
+            try:
+                ws.send("READY")
+                ws.send("OK")
+                logger.info("Handshake 'READY' & 'OK' berhasil dikirim ke ESP32-CAM.")
+            except Exception as e:
+                logger.warning(f"Gagal kirim handshake awal ke ESP32: {e}")
+
             while True:
                 message = ws.receive()
                 if message is None:
+                    logger.info("ESP32-CAM ws.receive() returned None (closed).")
                     break
+
+                # Handle jika ESP32 mengirim pesan teks (misal ping / request start / auth)
+                if isinstance(message, str):
+                    logger.info(f"ESP32-CAM teks diterima: '{message}'")
+                    msg_lower = message.lower().strip()
+                    if "ping" in msg_lower:
+                        ws.send("pong")
+                    else:
+                        ws.send("READY")
+                        ws.send("OK")
+                    continue
+
                 if not isinstance(message, (bytes, bytearray, memoryview)):
+                    logger.warning(f"ESP32-CAM pesan bukan bytes/str, tipe: {type(message)}")
                     continue
 
                 packet = bytes(message)
+                logger.info(f"ESP32-CAM frame packet diterima: {len(packet)} bytes")
                 decoded = decode_websocket_packet(packet, 16)
                 if decoded is None:
+                    logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes)")
                     continue
 
                 device_id, frame = decoded
                 robot_id = device_id if device_id and device_id != "UNKNOWN" else "fadfa566"
-
-                # Validasi security jika robot terdaftar
-                if not is_robot_registered(robot_id):
-                    continue
+                logger.info(f"ESP32-CAM decoded frame: shape={frame.shape if frame is not None else None}, device_id={device_id}")
 
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,

@@ -1,7 +1,5 @@
 # services/vision_pipeline_service.py
 
-from cv.eye_analyzer import EyeConditionAnalyzer
-
 import threading
 import time
 import numpy as np
@@ -10,25 +8,27 @@ from typing import Optional, Dict, Any, Tuple
 from cv.face_mesh import FaceMeshDetector
 from cv.eye_landmarks import extract_eye_coordinates
 from cv.ear import calculate_ear
-from cv.blink_detector import BlinkDetector
-from cv.blink_counter import BlinkCounter
+from cv.eye_analyzer import EyeConditionAnalyzer
 from cv.feature_extractor import FeatureExtractor
 from cv.visualization import Visualizer
 from utils.fps_counter import FPSCounter
 from utils.time_utils import get_current_iso_time
 from utils.logger import get_logger
+from config import settings
+
+from realtime.hardware_controller import HardwareActuatorController
 
 logger = get_logger(__name__)
 
 
 class VisionPipelineService:
     """
-    Orkestrasi seluruh langkah Computer Vision (CV) secara berurutan per frame.
-
-    Versi baru: menerima frame dari RobotWebSocketHandler (bukan CameraService),
-    dan menghasilkan hasil analisis yang diteruskan ke:
-      - FeatureStore (untuk endpoint /api/features debug)
-      - BackendSocketClient (Channel A real-time + Channel B via AggregatorService)
+    Orkestrasi seluruh langkah Computer Vision (CV) per-frame:
+    - Ekstraksi landmark MediaPipe & kalkulasi EAR
+    - Scoring komposit & klasifikasi fatigue (EyeConditionAnalyzer)
+    - Pembangunan payload terstandar (FeatureExtractor)
+    - Visualisasi anotasi frame untuk stream debug (Visualizer)
+    - Distribusi data ke Backend (Channel A real-time & Channel B agregasi)
     """
 
     def __init__(self, robot_ws_handler, be_socket_client, aggregator_service):
@@ -42,14 +42,19 @@ class VisionPipelineService:
         self.be_client = be_socket_client
         self.aggregator = aggregator_service
 
-        # Inisialisasi semua modul CV
+        # Inisialisasi modul-modul CV
         self.face_mesh = FaceMeshDetector()
-        self.blink_detector = BlinkDetector()
-        self.blink_counter = BlinkCounter()
+        self.eye_analyzer = EyeConditionAnalyzer(
+            ear_threshold=getattr(settings, 'EAR_THRESHOLD', 0.23),
+            window_seconds=60,
+            required_consecutive=3,
+            min_data_quality=0.7,
+            baseline_rate=17.0
+        )
         self.feature_extractor = FeatureExtractor()
         self.visualizer = Visualizer()
         self.fps_counter = FPSCounter()
-        self.eye_analyzer = EyeConditionAnalyzer()
+        self.hw_controller = HardwareActuatorController()
 
         # Shared state untuk hasil akhir (thread-safe) — untuk endpoint debug
         self.latest_features: Dict[str, Any] = {}
@@ -73,16 +78,13 @@ class VisionPipelineService:
 
     def _processing_loop(self) -> None:
         """
-        Loop utama: tunggu frame dari robot, proses, push ke BE.
-        Menerapkan frame-dropping secara implisit via RobotWebSocketHandler.
+        Loop utama: tunggu frame dari robot, proses analitik CV, push ke BE & Aggregator.
         """
         while self.is_running:
-            # Tunggu sampai ada frame baru dari robot (timeout 1 detik)
             has_frame = self.robot_ws.wait_for_frame(timeout=1.0)
             if not has_frame:
                 continue
 
-            # Ambil frame + data dari robot
             robot_id, frame, distance_json = self.robot_ws.get_pending()
             if frame is None or robot_id is None:
                 continue
@@ -91,75 +93,91 @@ class VisionPipelineService:
             iso_time = get_current_iso_time()
             fps = self.fps_counter.update()
 
-            # Ambil data jarak dari robot (bukan dihitung di ML)
             distance = distance_json.get("distance", "Jauh")
             confidence = distance_json.get("confidence", 0)
 
             # 1. Deteksi Wajah & Landmark
             landmarks = self.face_mesh.process(frame)
+            face_detected = (landmarks is not None)
+            face_confidence = 1.0 if face_detected else 0.0
 
-            blink_event = False
-            b_rate = 0.0
-            eye_analysis = {"status": "Aman", "conditions": ["Normal"], "recommendations": []}
+            left_eye, right_eye = None, None
+            avg_ear = 0.0
+            eye_status = "Unknown"
 
-            if landmarks:
+            if face_detected and landmarks:
                 h, w = frame.shape[:2]
 
-                # 2. Ekstrak Mata
+                # 2. Ekstrak Landmark Mata
                 left_eye, right_eye = extract_eye_coordinates(landmarks, w, h)
 
-                # 3. Hitung EAR Rata-rata
+                # 3. Hitung EAR (Eye Aspect Ratio)
                 ear_left = calculate_ear(left_eye)
                 ear_right = calculate_ear(right_eye)
                 avg_ear = (ear_left + ear_right) / 2.0
+                eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
 
-                # 4. Deteksi Kedipan & Hitung Statistik
-                eye_status, blink_event = self.blink_detector.process(avg_ear)
-                b_count, b_rate, c_duration = self.blink_counter.process(
-                    eye_status, blink_event, current_time
-                )
+            # 4. Evaluasi Scoring Komposit Mata Lelah & Kering
+            blink_event, metrics_dict = self.eye_analyzer.process_frame(
+                ear_value=avg_ear,
+                face_confidence=face_confidence,
+                timestamp=current_time
+            )
 
-                # 5. Analisis Kondisi Mata dari Blink Rate
-                eye_analysis = self.eye_analyzer.analyze_from_blink_rate(b_rate)
+            # 5. Bangun payload fitur lengkap
+            features = self.feature_extractor.build_payload(
+                face_detected=face_detected,
+                timestamp=iso_time,
+                fps=fps,
+                ear=round(avg_ear, 3) if face_detected else 0.0,
+                eye_status=eye_status,
+                blink_count=metrics_dict["blink_count"],
+                lifetime_blinks=metrics_dict["lifetime_blinks"],
+                blink_rate=metrics_dict["smoothed_blink_rate"],
+                raw_blink_rate=metrics_dict["raw_blink_rate"],
+                closure_duration=metrics_dict["avg_blink_duration"],
+                perclos=metrics_dict["perclos"],
+                composite_score=metrics_dict["composite_score"],
+                avg_blink_duration=metrics_dict["avg_blink_duration"],
+                interval_variability=metrics_dict["interval_variability"],
+                data_quality=metrics_dict["data_quality"],
+                system_status=metrics_dict["system_status"]
+            )
 
-                # 6. Build payload untuk feature store (debug endpoint)
-                features = self.feature_extractor.build_payload(
-                    face_detected=True, timestamp=iso_time, fps=fps,
-                    ear=round(avg_ear, 3), eye_status=eye_status,
-                    blink_count=b_count, blink_rate=b_rate, closure_duration=c_duration
-                )
-                features.update({
-                    "robot_id": robot_id,
-                    "distance": distance,
-                    "confidence": confidence,
-                    "health_status": eye_analysis["status"],
-                    "eye_conditions": eye_analysis["conditions"],
-                    "recommendations": eye_analysis["recommendations"]
-                })
+            # Evaluasi Hardware Command (LCD & Speaker)
+            eval_dict = {
+                "fatigue": {"status": metrics_dict["system_status"]},
+                "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
+                "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
+            }
+            hw_payload = self.hw_controller.evaluate(eval_dict)
 
-                # 7. Gambar Visualisasi (untuk endpoint /video_feed debug)
-                annotated_frame = self.visualizer.draw_annotations(
-                    frame, features, left_eye, right_eye
-                )
-            else:
-                # Fallback jika wajah tidak terdeteksi
-                b_count, b_rate, c_duration = 0, 0.0, 0.0
-                features = self.feature_extractor.build_payload(
-                    face_detected=False, timestamp=iso_time, fps=fps
-                )
-                features.update({
-                    "robot_id": robot_id,
-                    "distance": distance,
-                    "confidence": confidence,
-                })
-                annotated_frame = self.visualizer.draw_annotations(frame, features)
+            features.update({
+                "robot_id": robot_id,
+                "distance": distance,
+                "confidence": confidence,
+                "health_status": metrics_dict["health_status"],
+                "eye_conditions": metrics_dict["conditions"],
+                "recommendations": metrics_dict["recommendations"],
+                "hardware": hw_payload,
+                "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
+                "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
+            })
 
-            # 8. Simpan hasil ke shared state (thread-safe) untuk debug endpoint
+            # 6. Gambar Visualisasi Anotasi
+            annotated_frame = self.visualizer.draw_annotations(
+                frame=frame,
+                features=features,
+                left_eye=left_eye,
+                right_eye=right_eye
+            )
+
+            # 7. Simpan hasil ke shared state (thread-safe) untuk endpoint debug
             with self.lock:
                 self.latest_features = features
                 self.latest_annotated_frame = annotated_frame
 
-            # 9. Push Channel A (real-time) ke BE
+            # 8. Push Channel A (real-time) ke BE
             self.be_client.emit_realtime(
                 robot_id=robot_id,
                 distance=distance,
@@ -168,15 +186,17 @@ class VisionPipelineService:
                 timestamp=iso_time
             )
 
-            # 10. Kirim data ke AggregatorService untuk Channel B (1 menit)
+            # 9. Kirim data ke AggregatorService untuk Channel B (1 menit)
             self.aggregator.ingest(
                 robot_id=robot_id,
                 distance=distance,
                 blink_event=blink_event,
-                blink_rate=b_rate,
-                health_status=eye_analysis["status"],
-                eye_conditions=eye_analysis["conditions"],
-                recommendations=eye_analysis["recommendations"]
+                blink_rate=metrics_dict["smoothed_blink_rate"],
+                health_status=metrics_dict["health_status"],
+                eye_conditions=metrics_dict["conditions"],
+                recommendations=metrics_dict["recommendations"],
+                perclos=metrics_dict["perclos"],
+                composite_score=metrics_dict["composite_score"]
             )
 
     def get_latest_results(self) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:

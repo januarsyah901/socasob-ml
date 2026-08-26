@@ -5,11 +5,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOCACOMVI - Deteksi Kedipan Mata</title>
+    <title>SOCACOMVI - Deteksi Kedipan & Klasifikasi Mata Lelah</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #1e1e2f;
+            background-color: #1a1a28;
             color: #ffffff;
             margin: 0;
             padding: 20px;
@@ -27,90 +27,184 @@
         }
         .dashboard-container {
             display: flex;
-            gap: 30px;
-            max-width: 1200px;
+            gap: 25px;
+            max-width: 1280px;
             width: 100%;
             justify-content: center;
             flex-wrap: wrap;
         }
         .video-container {
-            background-color: #2a2a40;
+            background-color: #242438;
             padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+            flex: 1 1 500px;
+            max-width: 660px;
         }
         img {
-            max-width: 100%;
+            width: 100%;
             border-radius: 8px;
-            border: 2px solid #4da6ff;
+            border: 2px solid #3d84cc;
+            background: #111;
         }
         .metrics-container {
-            background-color: #2a2a40;
+            background-color: #242438;
             padding: 20px;
-            border-radius: 10px;
-            min-width: 300px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            border-radius: 12px;
+            min-width: 320px;
+            flex: 1 1 420px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
         }
         .metric-card {
-            background-color: #353550;
-            padding: 15px;
+            background-color: #2e2e46;
+            padding: 14px;
             border-radius: 8px;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             border-left: 5px solid #4da6ff;
+            transition: all 0.2s ease;
         }
         .metric-card.warning {
+            border-left-color: #ff9900;
+        }
+        .metric-card.danger {
             border-left-color: #ff4d4d;
         }
+        .metric-card.safe {
+            border-left-color: #2ecc71;
+        }
         .metric-title {
-            font-size: 0.9em;
+            font-size: 0.85em;
             color: #a0a0b0;
-            margin: 0 0 5px 0;
+            margin: 0 0 4px 0;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .metric-value {
-            font-size: 1.8em;
+            font-size: 1.6em;
             font-weight: bold;
             margin: 0;
         }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+        .badge-safe { background: #27ae60; color: #fff; }
+        .badge-warning { background: #e67e22; color: #fff; }
+        .badge-danger { background: #c0392b; color: #fff; }
         .json-view {
-            background-color: #151520;
+            background-color: #12121c;
             color: #a6e22e;
-            padding: 15px;
+            padding: 12px;
             border-radius: 8px;
             font-family: monospace;
             white-space: pre-wrap;
-            font-size: 0.85em;
-            overflow-x: auto;
+            font-size: 0.8em;
+            max-height: 220px;
+            overflow-y: auto;
         }
     </style>
 </head>
 <body>
 
     <h1>SOCACOMVI Dashboard</h1>
-    <p class="subtitle">Real-time Eye Blink Detection & API Output</p>
+    <p class="subtitle">Real-time Eye Fatigue & Dry Eye Scoring System</p>
 
     <div class="dashboard-container">
         <!-- Panel Kiri: Video Stream -->
         <div class="video-container">
-            <h2>Kamera Langsung</h2>
-            <!-- Tag gambar ini akan terus-menerus memuat aliran MJPEG dari server -->
+            <h2>Kamera Langsung & Anotasi</h2>
             <img src="/video_feed" alt="Video Stream Tidak Tersedia">
         </div>
 
         <!-- Panel Kanan: Data Metrik JSON -->
         <div class="metrics-container">
-            <h2>Metrik API <code>/api/features</code></h2>
+            <h2>Metrik Status & Analisis</h2>
             
+            <!-- Status Sistem -->
             <div class="metric-card" id="status-card">
-                <p class="metric-title">Status Mata Saat Ini</p>
-                <p class="metric-value" id="eye-status">Loading...</p>
+                <p class="metric-title">Klasifikasi Kondisi Mata</p>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                    <p class="metric-value" id="system-status" style="font-size: 1.4em;">Loading...</p>
+                    <span id="health-badge" class="badge badge-safe">Aman</span>
+                </div>
+                <div id="recommendation-box" style="margin-top: 10px; font-size: 0.85em; color: #cbd5e1; border-top: 1px solid #3e3e5e; padding-top: 8px;">
+                    💡 Rekomendasi: <span id="recommendation-text" style="color: #93c5fd;">Normal</span>
+                </div>
             </div>
 
+            <!-- PERCLOS & Kedipan -->
             <div class="metric-card">
-                <p class="metric-title">Total Kedipan / EAR Saat Ini</p>
-                <p class="metric-value"><span id="blink-count">0</span> <span style="font-size:0.5em; color:#a0a0b0">| EAR: <span id="ear-value">0.00</span></span></p>
-                <div style="margin-top: 10px; background: #222233; height: 10px; border-radius: 5px; overflow: hidden; position: relative;">
+                <p class="metric-title">PERCLOS & Laju Kedipan (Window 60s)</p>
+                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                    <div>
+                        <div style="font-size: 0.85em; color: #a0a0b0;">PERCLOS</div>
+                        <div style="font-size: 1.4em; font-weight: bold;"><span id="perclos-value">0.0</span>%</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.85em; color: #a0a0b0;">Blink Rate</div>
+                        <div style="font-size: 1.4em; font-weight: bold;"><span id="blink-rate">0.0</span> /min</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.85em; color: #a0a0b0;">Kedipan Window</div>
+                        <div style="font-size: 1.4em; font-weight: bold;" id="blink-count">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Status Kelopak Mata & EAR -->
+            <div class="metric-card">
+                <p class="metric-title">Keterbukaan Kelopak Mata (EAR)</p>
+                <p class="metric-value">
+                    <span id="eye-status">Open</span> 
+                    <span style="font-size:0.5em; color:#a0a0b0">| EAR: <span id="ear-value">0.00</span></span>
+                </p>
+                <div style="margin-top: 10px; background: #1a1a2a; height: 10px; border-radius: 5px; overflow: hidden;">
                     <div id="ear-bar" style="width: 0%; height: 100%; background: #4da6ff; transition: width 0.1s ease;"></div>
+                </div>
+            </div>
+
+            <!-- Robot Hardware Actuators (LCD & Speaker) -->
+            <div class="metric-card" style="border-left-color: #9b59b6; background: #261f3d;">
+                <p class="metric-title">🤖 Perintah Aktuator Robot (Hardware Stream)</p>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                    <!-- LCD Expression Preview -->
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div id="lcd-screen-box" style="width: 70px; height: 50px; background: #000; border: 2px solid #9b59b6; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.8em;">
+                            <span id="lcd-face-icon">👀</span>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.75em; color: #a0a0b0;">Status Ekspresi LCD:</div>
+                            <div style="font-size: 0.95em; font-weight: bold; color: #d8b4fe;" id="lcd-label">Muka Normal</div>
+                        </div>
+                    </div>
+                    <!-- Speaker Trigger Badge -->
+                    <div style="text-align: right;">
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Efek Suara Speaker:</div>
+                        <span id="speaker-badge" class="badge" style="background: #8e44ad; color: #fff; font-size: 0.85em; margin-top: 4px;">🔊 Tidak Bersuara</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Time Monitoring Panel -->
+            <div class="metric-card" style="border-left-color: #1abc9c;">
+                <p class="metric-title">⏱️ Time Monitoring & Aturan 20-20-20</p>
+                <div style="display: flex; justify-content: space-between; margin-top: 8px; text-align: center;">
+                    <div>
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Durasi Kerja (Sesi)</div>
+                        <div style="font-size: 1.2em; font-weight: bold; color: #1abc9c;" id="work-elapsed-time">0m 0s</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Countdown Istirahat 20s</div>
+                        <div style="font-size: 1.2em; font-weight: bold; color: #e74c3c;" id="break-countdown">0s</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Durasi Terdeteksi Lelah</div>
+                        <div style="font-size: 1.2em; font-weight: bold; color: #f39c12;" id="fatigue-duration">0m 0s</div>
+                    </div>
                 </div>
             </div>
 
@@ -122,11 +216,11 @@
                     <span id="threshold-label" style="font-weight: bold; font-size: 1.2em; color: #f39c12;">0.23</span>
                 </div>
                 <p style="font-size: 0.75em; color: #a0a0b0; margin-top: 6px;">
-                    *Jika kedipan belum terdeteksi, <b>geser ke kanan</b> (misal 0.24 - 0.26).
+                    *Sesuaikan jika mata sulit terdeteksi tertutup/terbuka.
                 </p>
             </div>
 
-            <h4>Raw JSON Response:</h4>
+            <h4>Raw JSON Output <code>/api/features</code>:</h4>
             <div class="json-view" id="json-output">
 Menunggu data dari API...
             </div>
@@ -170,37 +264,100 @@ Menunggu data dari API...
                     const data = res.data || res;
                     if (!data) return;
 
-                    // Update tampilan teks JSON
+                    // Update tampilan JSON
                     document.getElementById('json-output').innerText = JSON.stringify(res, null, 2);
                     
-                    // Update tampilan Card UI
-                    document.getElementById('eye-status').innerText = data.eye_status || "N/A";
-                    document.getElementById('blink-count').innerText = data.blink_count ?? 0;
+                    // Update tampilan status dan rekomendasi
+                    const statusText = data.system_status || data.health_status || "Aman";
+                    document.getElementById('system-status').innerText = statusText;
                     
+                    const recs = data.recommendations || [];
+                    const recText = Array.isArray(recs) && recs.length > 0 ? recs.join(" ") : (data.recommendation || "Pertahankan pola kedipan normal.");
+                    document.getElementById('recommendation-text').innerText = recText;
+                    
+                    const badge = document.getElementById('health-badge');
+                    const statusCard = document.getElementById('status-card');
+                    
+                    statusCard.classList.remove('safe', 'warning', 'danger');
+                    badge.classList.remove('badge-safe', 'badge-warning', 'badge-danger');
+                    
+                    if (statusText.includes("Berat") || statusText.includes("Kritis")) {
+                        statusCard.classList.add('danger');
+                        badge.classList.add('badge-danger');
+                        badge.innerText = "Bahaya / Kritis";
+                    } else if (statusText.includes("Ringan") || statusText.includes("Risiko") || statusText.includes("Peringatan")) {
+                        statusCard.classList.add('warning');
+                        badge.classList.add('badge-warning');
+                        badge.innerText = "Peringatan";
+                    } else if (statusText.includes("Tidak Valid") || statusText.includes("No Data")) {
+                        badge.innerText = "No Data";
+                    } else {
+                        statusCard.classList.add('safe');
+                        badge.classList.add('badge-safe');
+                        badge.innerText = "Aman";
+                    }
+
+                    // Update PERCLOS & Blink
+                    const perclosPct = ((data.perclos || 0) * 100).toFixed(1);
+                    document.getElementById('perclos-value').innerText = perclosPct;
+                    document.getElementById('blink-rate').innerText = (data.blink_rate || 0).toFixed(1);
+                    document.getElementById('blink-count').innerText = data.blink_count ?? 0;
+
+                    // Update status kelopak & EAR
+                    document.getElementById('eye-status').innerText = data.eye_status || "N/A";
                     const ear = Number(data.ear || 0);
                     document.getElementById('ear-value').innerText = ear.toFixed(3);
 
-                    // Update bar visualisasi EAR (skala 0.0 s.d 0.40 -> 0% s.d 100%)
+                    // Update bar EAR
                     const pct = Math.min(Math.max((ear / 0.40) * 100, 0), 100);
                     const bar = document.getElementById('ear-bar');
                     bar.style.width = pct + '%';
+                    bar.style.background = (data.eye_status === "Closed") ? "#ff4d4d" : "#4da6ff";
 
-                    // Ubah warna card & bar menjadi merah jika mata tertutup
-                    const statusCard = document.getElementById('status-card');
-                    if (data.eye_status === "Closed") {
-                        statusCard.classList.add('warning');
-                        statusCard.style.borderLeftColor = "#ff4d4d";
-                        bar.style.background = "#ff4d4d";
+                    // Update Robot Hardware Actuators (LCD & Speaker)
+                    const hw = data.hardware || {};
+                    const lcdCmd = hw.lcd_command || "normal";
+                    const speakerCmd = hw.speaker_command || "none";
+
+                    // Icon mapping 5 ekspresi LCD
+                    const lcdIcons = {
+                        "normal": "👀",
+                        "fatigue_5m": "😌",
+                        "fatigue_10m": "😠",
+                        "break_20m": "😊",
+                        "dry_eye": "😣"
+                    };
+                    document.getElementById('lcd-face-icon').innerText = lcdIcons[lcdCmd] || "👀";
+                    document.getElementById('lcd-label').innerText = hw.lcd_label || "Muka Normal";
+
+                    // Speaker sound badge mapping
+                    const speakerBadge = document.getElementById('speaker-badge');
+                    if (speakerCmd !== "none") {
+                        speakerBadge.style.background = "#e74c3c";
+                        speakerBadge.innerText = "🔊 " + (hw.speaker_label || speakerCmd);
                     } else {
-                        statusCard.classList.remove('warning');
-                        statusCard.style.borderLeftColor = "#4da6ff";
-                        bar.style.background = "#4da6ff";
+                        speakerBadge.style.background = "#8e44ad";
+                        speakerBadge.innerText = "🔇 Tidak Bersuara";
                     }
+
+                    // Update Time Monitoring
+                    const workSec = hw.work_elapsed_sec || data.work_elapsed_sec || 0;
+                    const breakRemSec = hw.break_remaining_sec || data.break_remaining_sec || 0;
+                    const fatigueSec = hw.fatigue_duration_sec || 0;
+
+                    const formatMinSec = (sec) => {
+                        const m = Math.floor(sec / 60);
+                        const s = Math.floor(sec % 60);
+                        return `${m}m ${s}s`;
+                    };
+
+                    document.getElementById('work-elapsed-time').innerText = formatMinSec(workSec);
+                    document.getElementById('break-countdown').innerText = Math.ceil(breakRemSec) + "s";
+                    document.getElementById('fatigue-duration').innerText = formatMinSec(fatigueSec);
                 })
                 .catch(error => console.error('Gagal mengambil data metrik:', error));
         }
 
-        // Panggil fungsi secara berulang setiap setengah detik (500ms)
         setInterval(fetchMetrics, 500);
     </script>
 </body>

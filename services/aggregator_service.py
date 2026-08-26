@@ -7,11 +7,12 @@
 # Data yang diakumulasi per menit:
 #   - Durasi "Dekat" dan "Jauh" dalam detik
 #   - Total kedipan & rata-rata blink rate
+#   - Rata-rata PERCLOS & Fatigue Score komposit
 #   - Health status & kondisi mata dari EyeConditionAnalyzer
 
 import time
 import threading
-from typing import Callable
+from typing import Callable, Optional
 from utils.time_utils import get_current_iso_time
 from utils.logger import get_logger
 
@@ -48,6 +49,8 @@ class AggregatorService:
         self._far_sec: float = 0.0
         self._blink_count: int = 0
         self._blink_rate_samples: list[float] = []
+        self._perclos_samples: list[float] = []
+        self._composite_score_samples: list[float] = []
         self._health_statuses: list[str] = []
         self._eye_conditions: list[str] = []
         self._recommendations: list[str] = []
@@ -90,18 +93,10 @@ class AggregatorService:
 
     def ingest(self, robot_id: str, distance: str, blink_event: bool,
                blink_rate: float, health_status: str,
-               eye_conditions: list[str], recommendations: list[str]) -> None:
+               eye_conditions: list[str], recommendations: list[str],
+               perclos: float = 0.0, composite_score: float = 0.0) -> None:
         """
         Terima data satu frame untuk diakumulasi.
-
-        Args:
-            robot_id (str): ID robot.
-            distance (str): "Dekat" atau "Jauh".
-            blink_event (bool): True jika frame ini mendeteksi kedipan.
-            blink_rate (float): Blink rate per menit saat frame ini.
-            health_status (str): "Aman" / "Peringatan".
-            eye_conditions (list): Kondisi mata terdeteksi.
-            recommendations (list): Rekomendasi dari EyeConditionAnalyzer.
         """
         current_time = time.time()
 
@@ -126,9 +121,11 @@ class AggregatorService:
             if blink_event:
                 self._blink_count += 1
 
-            # Simpan sample blink rate
+            # Simpan sample blink rate & komposit
             if blink_rate > 0:
                 self._blink_rate_samples.append(blink_rate)
+            self._perclos_samples.append(perclos)
+            self._composite_score_samples.append(composite_score)
 
             # Simpan health status dan kondisi
             self._health_statuses.append(health_status)
@@ -154,6 +151,15 @@ class AggregatorService:
             avg_blink_rate = round(
                 sum(self._blink_rate_samples) / len(self._blink_rate_samples), 2
             ) if self._blink_rate_samples else 0.0
+            
+            avg_perclos = round(
+                sum(self._perclos_samples) / len(self._perclos_samples), 3
+            ) if self._perclos_samples else 0.0
+            
+            avg_composite_score = round(
+                sum(self._composite_score_samples) / len(self._composite_score_samples), 1
+            ) if self._composite_score_samples else 0.0
+
             dominant_distance = "Dekat" if near_sec >= far_sec else "Jauh"
 
             # Ambil health_status yang paling sering muncul
@@ -186,6 +192,8 @@ class AggregatorService:
             "near_percentage": near_percentage,
             "blink_count": blink_count,
             "avg_blink_rate": avg_blink_rate,
+            "avg_perclos": avg_perclos,
+            "avg_fatigue_score": avg_composite_score,
             "dominant_distance": dominant_distance,
             "health_status": health_status,
             "eye_conditions": eye_conditions,
@@ -194,7 +202,7 @@ class AggregatorService:
 
         logger.info(
             f"[Aggregator] Summary robot={robot_id} | "
-            f"Dekat={near_sec}s | Jauh={far_sec}s | Blink={blink_count}"
+            f"Dekat={near_sec}s | Jauh={far_sec}s | Blink={blink_count} | FatigueScore={avg_composite_score}"
         )
 
         # Panggil callback (emit ke BE)

@@ -15,6 +15,7 @@ except ImportError:
     ASYNC_MODE = 'threading'
 
 from flask import Flask, render_template, Response, jsonify, request
+from flask_cors import CORS
 from flask_socketio import SocketIO
 
 import os
@@ -38,6 +39,7 @@ logger = get_logger(__name__)
 # ==========================================
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'socasob-ml-secret')
+CORS(app, origins="*")
 
 # SocketIO server di sisi ML — Robot connect ke sini
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
@@ -403,22 +405,83 @@ def api_config():
             "success": True,
             "data": {
                 "be_url": settings.BE_URL,
+                "flask_host": settings.FLASK_HOST,
                 "flask_port": settings.FLASK_PORT,
-                "ear_threshold": getattr(settings, 'EAR_THRESHOLD', 0.21),
-                "be_connected": be_client.is_connected
+                "flask_debug": settings.FLASK_DEBUG,
+                "video_source": settings.VIDEO_SOURCE,
+                "esp32_stream_url": settings.ESP32_STREAM_URL,
+                "webcam_index": settings.WEBCAM_INDEX,
+                "ear_threshold": settings.EAR_THRESHOLD,
+                "consec_frames": settings.CONSEC_FRAMES,
+                "log_level": settings.LOG_LEVEL,
+                "be_connected": be_client.is_connected,
+                "pipeline_running": pipeline_service.is_running if hasattr(pipeline_service, 'is_running') else True
             }
         }), 200
     else:
         data = request.get_json() or {}
+        updated = {}
+
         if 'ear_threshold' in data:
-            settings.EAR_THRESHOLD = float(data['ear_threshold'])
+            val = float(data['ear_threshold'])
+            if 0.1 <= val <= 0.5:
+                settings.EAR_THRESHOLD = val
+                updated['ear_threshold'] = val
+
+        if 'consec_frames' in data:
+            val = int(data['consec_frames'])
+            if 1 <= val <= 10:
+                settings.CONSEC_FRAMES = val
+                updated['consec_frames'] = val
+
+        if 'video_source' in data:
+            if data['video_source'] in ('webcam', 'esp32'):
+                settings.VIDEO_SOURCE = data['video_source']
+                updated['video_source'] = data['video_source']
+
+        if 'webcam_index' in data:
+            settings.WEBCAM_INDEX = int(data['webcam_index'])
+            updated['webcam_index'] = settings.WEBCAM_INDEX
+
+        if 'esp32_stream_url' in data:
+            settings.ESP32_STREAM_URL = str(data['esp32_stream_url'])
+            settings.ESP32_CAM_URL = settings.ESP32_STREAM_URL
+            updated['esp32_stream_url'] = settings.ESP32_STREAM_URL
+
+        if 'log_level' in data:
+            if data['log_level'] in ('DEBUG', 'INFO', 'WARNING', 'ERROR'):
+                settings.LOG_LEVEL = data['log_level']
+                updated['log_level'] = data['log_level']
+
         return jsonify({
             "success": True,
             "message": "Konfigurasi ML Server berhasil diperbarui",
+            "updated": updated,
             "data": {
-                "ear_threshold": getattr(settings, 'EAR_THRESHOLD', 0.21)
+                "ear_threshold": settings.EAR_THRESHOLD,
+                "consec_frames": settings.CONSEC_FRAMES,
+                "video_source": settings.VIDEO_SOURCE,
+                "webcam_index": settings.WEBCAM_INDEX,
+                "esp32_stream_url": settings.ESP32_STREAM_URL,
+                "log_level": settings.LOG_LEVEL
             }
         }), 200
+
+@app.route('/api/pipeline/status', methods=['GET'])
+def api_pipeline_status():
+    """
+    Ambil status detail pipeline CV.
+    """
+    data = feature_store.get()
+    return jsonify({
+        "success": True,
+        "data": {
+            "be_connected": be_client.is_connected,
+            "be_url": settings.BE_URL,
+            "last_features": data,
+            "has_active_frame": data is not None
+        }
+    }), 200
 
 # ==========================================
 # 6. Entry Point — Menjalankan Server (Direct Run)

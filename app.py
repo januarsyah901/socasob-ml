@@ -299,11 +299,14 @@ def api_send_frame():
             distance = distance_json.get('distance', distance)
             confidence = distance_json.get('confidence', confidence)
             
-            frame_b64 = data.get('frame_base64')
-            if frame_b64:
+            frame_b64 = data.get('frame_base64') or data.get('frame')
+            if frame_b64 and isinstance(frame_b64, str):
                 if ',' in frame_b64:
                     frame_b64 = frame_b64.split(',')[1]
-                frame_bytes = base64.b64decode(frame_b64)
+                try:
+                    frame_bytes = base64.b64decode(frame_b64)
+                except Exception as e:
+                    logger.warning(f"Failed to decode base64 frame in /api/frame: {e}")
         else:
             robot_id = request.form.get('robot_id', robot_id)
             distance = request.form.get('distance', distance)

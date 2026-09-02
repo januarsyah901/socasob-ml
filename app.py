@@ -188,15 +188,8 @@ def on_request_telemetry():
 if sock is not None:
     def _handle_esp32_raw_websocket(ws):
         logger.info("ESP32-CAM raw WebSocket terhubung.")
+        frame_counter = 0
         try:
-            # Kirim handshake response awal begitu terhubung
-            try:
-                ws.send("READY")
-                ws.send("OK")
-                logger.info("Handshake 'READY' & 'OK' berhasil dikirim ke ESP32-CAM.")
-            except Exception as e:
-                logger.warning(f"Gagal kirim handshake awal ke ESP32: {e}")
-
             while True:
                 message = ws.receive()
                 if message is None:
@@ -208,10 +201,10 @@ if sock is not None:
                     logger.info(f"ESP32-CAM teks diterima: '{message}'")
                     msg_lower = message.lower().strip()
                     if "ping" in msg_lower:
-                        ws.send("pong")
-                    else:
-                        ws.send("READY")
-                        ws.send("OK")
+                        try:
+                            ws.send("pong")
+                        except Exception:
+                            pass
                     continue
 
                 if not isinstance(message, (bytes, bytearray, memoryview)):
@@ -219,7 +212,6 @@ if sock is not None:
                     continue
 
                 packet = bytes(message)
-                logger.info(f"ESP32-CAM frame packet diterima: {len(packet)} bytes")
                 decoded = decode_websocket_packet(packet, 16)
                 if decoded is None:
                     logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes)")
@@ -227,7 +219,10 @@ if sock is not None:
 
                 device_id, frame = decoded
                 robot_id = device_id if device_id and device_id != "UNKNOWN" else "fadfa566"
-                logger.info(f"ESP32-CAM decoded frame: shape={frame.shape if frame is not None else None}, device_id={device_id}")
+                
+                frame_counter += 1
+                if frame_counter % 30 == 0:
+                    logger.info(f"ESP32-CAM streaming aktif: {frame_counter} frame diterima (shape={frame.shape if frame is not None else None})")
 
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,
@@ -235,7 +230,7 @@ if sock is not None:
                     distance_json={"distance": "Dekat", "confidence": 95}
                 )
         except Exception as error:
-            logger.info(f"ESP32-CAM raw WebSocket terputus: {error}")
+            logger.info(f"ESP32-CAM raw WebSocket terputus setelah {frame_counter} frame: {error}")
 
     @sock.route('/ws')
     def handle_esp32_ws(ws):

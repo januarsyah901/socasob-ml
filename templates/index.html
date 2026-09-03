@@ -208,6 +208,28 @@
                 </div>
             </div>
 
+            <!-- Ukuran Frame & Jaringan Stream Robot -->
+            <div class="metric-card" style="border-left-color: #00d2d3; background: #162436;">
+                <p class="metric-title">📡 Ukuran Frame & Data Robot (Stream Live)</p>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                    <div>
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Ukuran Frame (MB)</div>
+                        <div style="font-size: 1.4em; font-weight: bold; color: #00d2d3;">
+                            <span id="frame-size-mb">0.0000</span> <span style="font-size: 0.6em; color:#a0a0b0;">MB</span>
+                        </div>
+                        <div style="font-size: 0.75em; color: #94a3b8;"><span id="frame-size-kb">0.0</span> KB (<span id="frame-size-bytes">0</span> Bytes)</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Device ID Robot</div>
+                        <div style="font-size: 1.1em; font-weight: bold; color: #f8fafc;" id="robot-id-display">-</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 0.75em; color: #a0a0b0;">Trigger Teks Aktif</div>
+                        <span id="robot-trigger-badge" class="badge" style="background: #2563eb; color: #fff; font-size: 0.85em; margin-top: 4px;">normal</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Kalibrasi Sensitivitas EAR -->
             <div class="metric-card" style="border-left-color: #f39c12;">
                 <p class="metric-title">⚙️ Sensitivitas EAR Threshold</p>
@@ -354,6 +376,32 @@ Menunggu data dari API...
                     document.getElementById('work-elapsed-time').innerText = formatMinSec(workSec);
                     document.getElementById('break-countdown').innerText = Math.ceil(breakRemSec) + "s";
                     document.getElementById('fatigue-duration').innerText = formatMinSec(fatigueSec);
+
+                    // Update Ukuran Frame & Robot Trigger
+                    const frameMb = Number(data.frame_size_mb || 0);
+                    const frameKb = Number(data.frame_size_kb || 0);
+                    const frameBytes = Number(data.frame_size_bytes || 0);
+                    document.getElementById('frame-size-mb').innerText = frameMb.toFixed(4);
+                    document.getElementById('frame-size-kb').innerText = frameKb.toFixed(1);
+                    document.getElementById('frame-size-bytes').innerText = frameBytes.toLocaleString();
+                    document.getElementById('robot-id-display').innerText = data.robot_id || "-";
+
+                    const robotTrig = data.robot_trigger || (data.hardware ? data.hardware.robot_trigger : "normal") || "normal";
+                    const trigBadge = document.getElementById('robot-trigger-badge');
+                    trigBadge.innerText = robotTrig;
+                    if (robotTrig === "dry") {
+                        trigBadge.style.background = "#e67e22";
+                        trigBadge.style.color = "#fff";
+                    } else if (robotTrig === "10") {
+                        trigBadge.style.background = "#e74c3c";
+                        trigBadge.style.color = "#fff";
+                    } else if (robotTrig === "5") {
+                        trigBadge.style.background = "#f1c40f";
+                        trigBadge.style.color = "#000";
+                    } else {
+                        trigBadge.style.background = "#2ecc71";
+                        trigBadge.style.color = "#fff";
+                    }
                 })
                 .catch(error => console.error('Gagal mengambil data metrik:', error));
         }

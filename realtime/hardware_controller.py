@@ -189,6 +189,24 @@ class HardwareActuatorController:
             break_rem=break_remaining,
         )
 
+    @staticmethod
+    def to_robot_trigger(lcd_cmd: str) -> str:
+        """
+        Memetakan perintah LCD internal ke 4 trigger pesan teks untuk robot:
+        - 'normal'       -> 'normal'
+        - 'fatigue_5m'   -> '5'
+        - 'fatigue_10m'  -> '10'
+        - 'dry_eye'      -> 'dry'
+        - default        -> 'normal'
+        """
+        mapping = {
+            "normal": "normal",
+            "fatigue_5m": "5",
+            "fatigue_10m": "10",
+            "dry_eye": "dry",
+        }
+        return mapping.get(lcd_cmd, "normal")
+
     def _build_payload(
         self,
         lcd: str,
@@ -201,6 +219,7 @@ class HardwareActuatorController:
         return {
             "target": "hardware",
             "lcd_command": lcd,
+            "robot_trigger": self.to_robot_trigger(lcd),
             "speaker_command": speaker,
             "lcd_label": lcd_label,
             "speaker_label": speaker_label,
@@ -208,3 +227,4 @@ class HardwareActuatorController:
             "break_remaining_sec": round(break_rem, 1),
             "timestamp": time.time(),
         }
+

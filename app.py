@@ -51,17 +51,20 @@ except ImportError:
     sock = None
 
 from camera.esp32_camera import decode_websocket_packet
+from services.robot_trigger_service import RobotTriggerService
 
 # ==========================================
 # 2. Inisialisasi Semua Komponen (Services)
 # ==========================================
 robot_ws_handler = RobotWebSocketHandler(pipeline_service=None)  # pipeline di-set setelah init
 be_client = BackendSocketClient()
+robot_trigger_service = RobotTriggerService(be_socket_client=be_client)
 aggregator = AggregatorService(on_summary=be_client.emit_minute_summary)
 pipeline_service = VisionPipelineService(
     robot_ws_handler=robot_ws_handler,
     be_socket_client=be_client,
-    aggregator_service=aggregator
+    aggregator_service=aggregator,
+    trigger_service=robot_trigger_service
 )
 
 # Set pipeline ke robot_ws_handler (resolve circular dependency)
@@ -146,11 +149,14 @@ def on_robot_frame(data):
         logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
         return
 
+    frame_size = len(frame_bytes) if frame_bytes else 0
+
     # Teruskan ke handler (frame-dropping terjadi di sini)
     robot_ws_handler.on_robot_frame(
         robot_id=robot_id,
         frame_bytes=frame_bytes,
-        distance_json=distance_json
+        distance_json=distance_json,
+        frame_size_bytes=frame_size
     )
 
 @socketio.on('esp32_frame')
@@ -169,10 +175,12 @@ def on_esp32_frame(data):
         logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar.")
         return
 
+    frame_size = len(frame_bytes)
     robot_ws_handler.on_robot_frame(
         robot_id=robot_id,
         frame_bytes=bytes(frame_bytes),
-        distance_json=distance_json
+        distance_json=distance_json,
+        frame_size_bytes=frame_size
     )
 
 @socketio.on('request_telemetry')
@@ -188,12 +196,14 @@ def on_request_telemetry():
 if sock is not None:
     def _handle_esp32_raw_websocket(ws):
         logger.info("ESP32-CAM raw WebSocket terhubung.")
+        current_robot_id = None
         try:
             # Kirim handshake response awal begitu terhubung
             try:
                 ws.send("READY")
                 ws.send("OK")
-                logger.info("Handshake 'READY' & 'OK' berhasil dikirim ke ESP32-CAM.")
+                ws.send("normal")
+                logger.info("Handshake 'READY', 'OK', dan trigger awal 'normal' berhasil dikirim ke ESP32-CAM.")
             except Exception as e:
                 logger.warning(f"Gagal kirim handshake awal ke ESP32: {e}")
 
@@ -219,23 +229,41 @@ if sock is not None:
                     continue
 
                 packet = bytes(message)
-                logger.info(f"ESP32-CAM frame packet diterima: {len(packet)} bytes")
+                packet_size_bytes = len(packet)
+                packet_size_mb = packet_size_bytes / (1024 * 1024)
+                packet_size_kb = packet_size_bytes / 1024
+                logger.info(f"ESP32-CAM frame packet diterima: {packet_size_bytes} bytes ({packet_size_mb:.4f} MB / {packet_size_kb:.1f} KB)")
                 decoded = decode_websocket_packet(packet, 16)
                 if decoded is None:
                     logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes)")
                     continue
 
-                device_id, frame = decoded
-                robot_id = device_id if device_id and device_id != "UNKNOWN" else "fadfa566"
-                logger.info(f"ESP32-CAM decoded frame: shape={frame.shape if frame is not None else None}, device_id={device_id}")
+                is_dekat = False
+                if len(decoded) == 3:
+                    device_id, frame, is_dekat = decoded
+                else:
+                    device_id, frame = decoded
 
+                robot_id = device_id if device_id and device_id != "UNKNOWN" else "dummyrobot01"
+                current_robot_id = robot_id
+
+                # Daftarkan socket aktif ke trigger service
+                robot_trigger_service.register_connection(robot_id, ws)
+
+                logger.info(f"ESP32-CAM decoded frame: shape={frame.shape if frame is not None else None}, device_id={device_id}, is_dekat={is_dekat}, size={packet_size_mb:.4f} MB")
+
+                dist_str = "Dekat" if is_dekat else "Jauh"
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,
                     frame=frame,
-                    distance_json={"distance": "Dekat", "confidence": 95}
+                    distance_json={"distance": dist_str, "confidence": 95},
+                    frame_size_bytes=packet_size_bytes
                 )
         except Exception as error:
             logger.info(f"ESP32-CAM raw WebSocket terputus: {error}")
+        finally:
+            if current_robot_id:
+                robot_trigger_service.unregister_connection(current_robot_id, ws)
 
     @sock.route('/ws')
     def handle_esp32_ws(ws):
@@ -285,6 +313,67 @@ def api_features():
         }), 404
     return jsonify({"success": True, "data": data})
 
+@app.route('/api/robot/trigger-test', methods=['GET', 'POST'])
+def api_trigger_robot_test():
+    """
+    Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry") ke robot.
+    Menerima parameter 'trigger' dan opsional 'robot_id'.
+    """
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
+        trigger = data.get('trigger')
+        robot_id = data.get('robot_id')
+    else:
+        trigger = request.args.get('trigger')
+        robot_id = request.args.get('robot_id')
+
+    if not trigger:
+        return jsonify({
+            "success": False,
+            "error": "Parameter 'trigger' wajib diisi.",
+            "supported_triggers": ["normal", "5", "10", "dry"],
+            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"dry\", \"robot_id\": \"dummyrobot01\"}'"
+        }), 400
+
+    trigger_clean = str(trigger).strip().lower()
+    if trigger_clean not in {"normal", "5", "10", "dry"}:
+        return jsonify({
+            "success": False,
+            "error": f"Trigger '{trigger}' tidak valid.",
+            "supported_triggers": ["normal", "5", "10", "dry"]
+        }), 400
+
+    # Jika robot_id tidak disebutkan, kirim ke semua robot yang terhubung
+    if not robot_id:
+        count = robot_trigger_service.broadcast_trigger(trigger_clean, force=True)
+        return jsonify({
+            "success": True,
+            "message": f"Trigger '{trigger_clean}' berhasil dibroadcast ke {count} robot terhubung.",
+            "trigger": trigger_clean,
+            "broadcast_count": count
+        }), 200
+
+    sent = robot_trigger_service.send_trigger(robot_id, trigger_clean, force=True)
+    return jsonify({
+        "success": True,
+        "message": f"Trigger '{trigger_clean}' dikirim ke robot '{robot_id}'.",
+        "robot_id": robot_id,
+        "trigger": trigger_clean,
+        "delivered_to_hardware": sent,
+        "hardware_connected": robot_trigger_service.is_connected(robot_id)
+    }), 200
+
+@app.route('/api/robot/trigger-status', methods=['GET'])
+def api_get_robot_trigger_status():
+    """Mengecek trigger terakhir dan status koneksi robot."""
+    robot_id = request.args.get('robot_id', 'dummyrobot01')
+    return jsonify({
+        "success": True,
+        "robot_id": robot_id,
+        "current_trigger": robot_trigger_service.get_last_trigger(robot_id),
+        "is_connected": robot_trigger_service.is_connected(robot_id)
+    }), 200
+
 @app.route('/api/frame', methods=['POST'])
 def api_send_frame():
     """
@@ -333,11 +422,16 @@ def api_send_frame():
 
         distance_payload = {"distance": distance, "confidence": confidence}
 
+        frame_size = len(frame_bytes)
+        frame_mb = round(frame_size / (1024 * 1024), 4)
+        frame_kb = round(frame_size / 1024, 2)
+
         # Teruskan ke robot_ws_handler
         robot_ws_handler.on_robot_frame(
             robot_id=robot_id,
             frame_bytes=frame_bytes,
-            distance_json=distance_payload
+            distance_json=distance_payload,
+            frame_size_bytes=frame_size
         )
 
         return jsonify({
@@ -347,7 +441,10 @@ def api_send_frame():
                 "robot_id": robot_id,
                 "distance": distance,
                 "confidence": confidence,
-                "frame_size_bytes": len(frame_bytes)
+                "frame_size_bytes": frame_size,
+                "frame_size_kb": frame_kb,
+                "frame_size_mb": frame_mb,
+                "frame_size_formatted": f"{frame_mb:.4f} MB ({frame_kb:.1f} KB)"
             }
         }), 200
     except Exception as e:

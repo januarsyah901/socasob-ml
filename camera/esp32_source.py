@@ -10,8 +10,7 @@ Mendukung dua mode:
 
 import threading
 import time
-from typing import Optional, Tuple
-from urllib.parse import urlparse
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -25,37 +24,54 @@ logger = get_logger(__name__)
 def decode_websocket_packet(
     packet: bytes,
     device_id_size: int = 16,
-) -> Optional[Tuple[str, np.ndarray]]:
+) -> Optional[Union[Tuple[str, np.ndarray], Tuple[str, np.ndarray, bool]]]:
     """
     Decode paket biner dari ESP32-CAM.
 
-    Mendukung dua format:
-    - Raw JPEG (dimulai dengan magic bytes 0xFFD8)
-    - Legacy format: [device_id (N bytes)] + [JPEG data]
+    Mendukung 3 format:
+    1. Dynamic format robot: [id_len (1B)][device_id][is_dekat (1B)][JPEG]
+    2. Raw JPEG (dimulai dengan magic bytes 0xFFD8)
+    3. Legacy format: [device_id (N bytes)] + [JPEG data]
 
     Returns:
-        Tuple (device_id, frame_bgr) atau None jika gagal decode.
+        Tuple (device_id, frame_bgr) atau (device_id, frame_bgr, is_dekat) atau None jika gagal decode.
     """
+    if not packet or len(packet) < 4:
+        return None
+
+    # 1. Format Dynamic Robot (firmware PEKAEM)
+    id_len = packet[0]
+    if 1 <= id_len <= 64 and len(packet) > (1 + id_len + 1 + 2):
+        jpeg_part = packet[1 + id_len + 1:]
+        if jpeg_part.startswith(b"\xff\xd8"):
+            device_id = packet[1:1 + id_len].decode("ascii", errors="replace").strip()
+            is_dekat = bool(packet[1 + id_len])
+            frame = cv2.imdecode(np.frombuffer(jpeg_part, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                return device_id, frame, is_dekat
+
+    # 2. Raw JPEG
     if packet.startswith(b"\xff\xd8"):
         frame = cv2.imdecode(
             np.frombuffer(packet, dtype=np.uint8),
             cv2.IMREAD_COLOR,
         )
-        return ("UNKNOWN", frame) if frame is not None else None
+        return ("UNKNOWN", frame, False) if frame is not None else None
 
+    # 3. Legacy Fixed-Size ID
     if len(packet) <= device_id_size:
         return None
 
     device_id = packet[:device_id_size].rstrip(b"\x00").decode(
         "ascii", errors="replace"
-    )
+    ).strip()
     frame = cv2.imdecode(
         np.frombuffer(packet[device_id_size:], dtype=np.uint8),
         cv2.IMREAD_COLOR,
     )
     if frame is None:
         return None
-    return device_id, frame
+    return device_id, frame, False
 
 
 class ESP32CamSource(CameraSource):

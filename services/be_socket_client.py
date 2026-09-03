@@ -137,6 +137,20 @@ class BackendSocketClient:
         except Exception as e:
             logger.error(f"[BE Client] Gagal emit py-minute-summary: {e}")
 
+    def emit_hardware_status(self, payload: dict) -> None:
+        """
+        Kirim status trigger / hardware robot ke BE.
+        Event: py-hardware-status
+        """
+        if not self._connected:
+            return
+
+        try:
+            self._sio.emit('py-hardware-status', payload)
+            logger.debug(f"[BE Client] emit py-hardware-status -> {payload.get('robot_trigger')}")
+        except Exception as e:
+            logger.error(f"[BE Client] Gagal emit py-hardware-status: {e}")
+
     @property
     def is_connected(self) -> bool:
         return self._connected

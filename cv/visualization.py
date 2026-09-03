@@ -48,6 +48,8 @@ class Visualizer:
         score = features.get("composite_score", 0.0)
         system_status = features.get("system_status") or features.get("health_status", "Aman")
         fps = features.get("fps", 0.0)
+        frame_mb = features.get("frame_size_mb", 0.0)
+        size_label = f"{frame_mb:.4f} MB" if frame_mb > 0 else "0.0000 MB"
 
         # Tentukan warna status
         if "Berat" in system_status:
@@ -61,8 +63,8 @@ class Visualizer:
 
         # 3. Baris teks overlay
         texts = [
-            (f"FPS: {fps:.1f} | Face: {'Yes' if features.get('face_detected') else 'No'}", self.color_text),
-            (f"EAR: {ear:.2f} ({status})", self.color_warning_dark if status == "Closed" else self.color_text),
+            (f"FPS: {fps:.1f} | Frame: {size_label}", self.color_text),
+            (f"EAR: {ear:.2f} ({status}) | Face: {'Yes' if features.get('face_detected') else 'No'}", self.color_warning_dark if status == "Closed" else self.color_text),
             (f"Blinks: {blinks} | Rate: {rate:.1f}/min", self.color_text),
             (f"PERCLOS: {perclos*100:.1f}%", self.color_text),
             (f"Status: {system_status}", status_color)

@@ -31,16 +31,18 @@ class VisionPipelineService:
     - Distribusi data ke Backend (Channel A real-time & Channel B agregasi)
     """
 
-    def __init__(self, robot_ws_handler, be_socket_client, aggregator_service):
+    def __init__(self, robot_ws_handler, be_socket_client, aggregator_service, trigger_service=None):
         """
         Args:
             robot_ws_handler: Instance RobotWebSocketHandler sebagai sumber frame.
             be_socket_client: Instance BackendSocketClient untuk push data ke BE.
             aggregator_service: Instance AggregatorService untuk akumulasi 1 menit.
+            trigger_service: Instance RobotTriggerService untuk trigger teks ke ESP32.
         """
         self.robot_ws = robot_ws_handler
         self.be_client = be_socket_client
         self.aggregator = aggregator_service
+        self.trigger_service = trigger_service
 
         # Inisialisasi modul-modul CV
         self.face_mesh = FaceMeshDetector()
@@ -85,9 +87,19 @@ class VisionPipelineService:
             if not has_frame:
                 continue
 
-            robot_id, frame, distance_json = self.robot_ws.get_pending()
+            pending_res = self.robot_ws.get_pending()
+            if len(pending_res) == 4:
+                robot_id, frame, distance_json, frame_size_bytes = pending_res
+            else:
+                robot_id, frame, distance_json = pending_res
+                frame_size_bytes = frame.nbytes if frame is not None else 0
+
             if frame is None or robot_id is None:
                 continue
+
+            frame_size_bytes = frame_size_bytes or (frame.nbytes if frame is not None else 0)
+            frame_size_mb = round(frame_size_bytes / (1024 * 1024), 4)
+            frame_size_kb = round(frame_size_bytes / 1024, 2)
 
             current_time = time.time()
             iso_time = get_current_iso_time()
@@ -151,15 +163,25 @@ class VisionPipelineService:
                 "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
             }
             hw_payload = self.hw_controller.evaluate(eval_dict)
+            trigger_text = hw_payload.get("robot_trigger", "normal")
+
+            # Kirim trigger pesan teks ke robot jika trigger service aktif
+            if self.trigger_service is not None and robot_id:
+                self.trigger_service.send_trigger(robot_id, trigger_text)
 
             features.update({
                 "robot_id": robot_id,
+                "frame_size_bytes": frame_size_bytes,
+                "frame_size_kb": frame_size_kb,
+                "frame_size_mb": frame_size_mb,
+                "frame_size_formatted": f"{frame_size_mb:.4f} MB ({frame_size_kb:.1f} KB)",
                 "distance": distance,
                 "confidence": confidence,
                 "health_status": metrics_dict["health_status"],
                 "eye_conditions": metrics_dict["conditions"],
                 "recommendations": metrics_dict["recommendations"],
                 "hardware": hw_payload,
+                "robot_trigger": trigger_text,
                 "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
                 "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
             })

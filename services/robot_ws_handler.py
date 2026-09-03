@@ -43,9 +43,10 @@ class RobotWebSocketHandler:
         self._pending_frame: np.ndarray | None = None
         self._pending_distance_json: dict | None = None
         self._pending_robot_id: str | None = None
+        self._pending_frame_size_bytes: int = 0
         self._has_pending = threading.Event()
 
-    def on_robot_frame(self, robot_id: str, frame_bytes: bytes, distance_json: dict) -> None:
+    def on_robot_frame(self, robot_id: str, frame_bytes: bytes, distance_json: dict, frame_size_bytes: int = None) -> None:
         """
         Dipanggil oleh Flask-SocketIO setiap kali robot mengirim frame.
         Menerapkan frame-dropping: hanya simpan frame terbaru, buang yang lama.
@@ -54,6 +55,7 @@ class RobotWebSocketHandler:
             robot_id (str): ID unik robot pengirim.
             frame_bytes (bytes): Raw bytes gambar JPEG dari robot.
             distance_json (dict): Payload jarak dari robot: {distance, confidence}.
+            frame_size_bytes (int, optional): Ukuran data frame dalam bytes.
         """
         # Decode JPEG bytes → numpy array BGR (format OpenCV)
         nparr = np.frombuffer(frame_bytes, np.uint8)
@@ -63,50 +65,57 @@ class RobotWebSocketHandler:
             logger.warning(f"[{robot_id}] Gagal decode frame JPEG dari robot. Frame di-skip.")
             return
 
+        size_bytes = frame_size_bytes if frame_size_bytes is not None else len(frame_bytes)
+
         # Simpan frame terbaru (overwrite frame lama yang belum sempat diproses = frame-drop)
         with self.lock:
             self._pending_frame = frame
             self._pending_distance_json = distance_json
             self._pending_robot_id = robot_id
+            self._pending_frame_size_bytes = size_bytes
             self._has_pending.set()
 
-        logger.debug(f"[{robot_id}] Frame diterima. distance={distance_json.get('distance')}")
+        logger.debug(f"[{robot_id}] Frame diterima: {size_bytes} bytes ({size_bytes / (1024*1024):.4f} MB). distance={distance_json.get('distance')}")
 
-    def on_frame_array(self, robot_id: str, frame: np.ndarray, distance_json: dict = None) -> None:
+    def on_frame_array(self, robot_id: str, frame: np.ndarray, distance_json: dict = None, frame_size_bytes: int = None) -> None:
         """
         Menyimpan frame numpy array yang sudah terdecode (misal dari raw websocket / camera service).
         """
         if frame is None or frame.size == 0:
             return
+        size_bytes = frame_size_bytes if frame_size_bytes is not None else frame.nbytes
         with self.lock:
             self._pending_frame = frame
             self._pending_distance_json = distance_json or {}
             self._pending_robot_id = robot_id
+            self._pending_frame_size_bytes = size_bytes
             self._has_pending.set()
 
-    def get_pending(self) -> tuple[str | None, np.ndarray | None, dict | None]:
+    def get_pending(self) -> tuple[str | None, np.ndarray | None, dict | None, int]:
         """
         Mengambil frame + data terbaru yang menunggu untuk diproses.
         Dipanggil oleh VisionPipelineService dari thread pemprosesannya.
 
         Returns:
-            Tuple (robot_id, frame, distance_json) atau (None, None, None) jika kosong.
+            Tuple (robot_id, frame, distance_json, frame_size_bytes) atau (None, None, None, 0) jika kosong.
         """
         with self.lock:
             if self._pending_frame is None:
-                return None, None, None
+                return None, None, None, 0
 
             robot_id = self._pending_robot_id
             frame = self._pending_frame.copy()
             distance_json = self._pending_distance_json.copy() if self._pending_distance_json else {}
+            frame_size_bytes = self._pending_frame_size_bytes
 
             # Reset pending setelah diambil
             self._pending_frame = None
             self._pending_distance_json = None
             self._pending_robot_id = None
+            self._pending_frame_size_bytes = 0
             self._has_pending.clear()
 
-            return robot_id, frame, distance_json
+            return robot_id, frame, distance_json, frame_size_bytes
 
     def wait_for_frame(self, timeout: float = 1.0) -> bool:
         """

@@ -65,6 +65,7 @@ class VisionPipelineService:
 
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
+        self.last_frame_time = 0.0
 
     def start(self) -> None:
         if self.is_running:
@@ -83,151 +84,165 @@ class VisionPipelineService:
         Loop utama: tunggu frame dari robot, proses analitik CV, push ke BE & Aggregator.
         """
         while self.is_running:
-            has_frame = self.robot_ws.wait_for_frame(timeout=1.0)
-            if not has_frame:
-                continue
+            try:
+                has_frame = self.robot_ws.wait_for_frame(timeout=1.0)
+                if not has_frame:
+                    continue
 
-            pending_res = self.robot_ws.get_pending()
-            if len(pending_res) == 4:
-                robot_id, frame, distance_json, frame_size_bytes = pending_res
-            else:
-                robot_id, frame, distance_json = pending_res
-                frame_size_bytes = frame.nbytes if frame is not None else 0
+                pending_res = self.robot_ws.get_pending()
+                if len(pending_res) == 4:
+                    robot_id, frame, distance_json, frame_size_bytes = pending_res
+                else:
+                    robot_id, frame, distance_json = pending_res
+                    frame_size_bytes = frame.nbytes if frame is not None else 0
 
-            if frame is None or robot_id is None:
-                continue
+                if frame is None or robot_id is None:
+                    continue
 
-            frame_size_bytes = frame_size_bytes or (frame.nbytes if frame is not None else 0)
-            frame_size_mb = round(frame_size_bytes / (1024 * 1024), 4)
-            frame_size_kb = round(frame_size_bytes / 1024, 2)
+                frame_size_bytes = frame_size_bytes or (frame.nbytes if frame is not None else 0)
+                frame_size_mb = round(frame_size_bytes / (1024 * 1024), 4)
+                frame_size_kb = round(frame_size_bytes / 1024, 2)
 
-            current_time = time.time()
-            iso_time = get_current_iso_time()
-            fps = self.fps_counter.update()
+                current_time = time.time()
+                self.last_frame_time = current_time
+                iso_time = get_current_iso_time()
+                fps = self.fps_counter.update()
 
-            distance = distance_json.get("distance", "Jauh")
-            confidence = distance_json.get("confidence", 0)
+                distance = distance_json.get("distance", "Jauh")
+                confidence = distance_json.get("confidence", 0)
 
-            # 1. Deteksi Wajah & Landmark
-            landmarks = self.face_mesh.process(frame)
-            face_detected = (landmarks is not None)
-            face_confidence = 1.0 if face_detected else 0.0
+                # 1. Deteksi Wajah & Landmark
+                landmarks = self.face_mesh.process(frame)
+                face_detected = (landmarks is not None)
+                face_confidence = 1.0 if face_detected else 0.0
 
-            left_eye, right_eye = None, None
-            avg_ear = 0.0
-            eye_status = "Unknown"
+                left_eye, right_eye = None, None
+                avg_ear = 0.0
+                eye_status = "Unknown"
 
-            if face_detected and landmarks:
-                h, w = frame.shape[:2]
+                if face_detected and landmarks:
+                    h, w = frame.shape[:2]
+                    left_eye, right_eye = extract_eye_coordinates(landmarks, w, h)
+                    ear_left = calculate_ear(left_eye)
+                    ear_right = calculate_ear(right_eye)
+                    avg_ear = (ear_left + ear_right) / 2.0
+                    eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
 
-                # 2. Ekstrak Landmark Mata
-                left_eye, right_eye = extract_eye_coordinates(landmarks, w, h)
+                # 2. Analisis Kondisi Mata
+                blink_event, metrics_dict = self.eye_analyzer.process_frame(
+                    ear_value=avg_ear,
+                    face_confidence=face_confidence,
+                    timestamp=current_time
+                )
 
-                # 3. Hitung EAR (Eye Aspect Ratio)
-                ear_left = calculate_ear(left_eye)
-                ear_right = calculate_ear(right_eye)
-                avg_ear = (ear_left + ear_right) / 2.0
-                eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
+                # 3. Ekstraksi Payload Fitur Terstandar
+                features = self.feature_extractor.build_payload(
+                    face_detected=face_detected,
+                    timestamp=iso_time,
+                    fps=fps,
+                    ear=round(avg_ear, 3) if face_detected else 0.0,
+                    eye_status=eye_status,
+                    blink_count=metrics_dict["blink_count"],
+                    lifetime_blinks=metrics_dict["lifetime_blinks"],
+                    blink_rate=metrics_dict["smoothed_blink_rate"],
+                    raw_blink_rate=metrics_dict["raw_blink_rate"],
+                    closure_duration=metrics_dict["avg_blink_duration"],
+                    perclos=metrics_dict["perclos"],
+                    composite_score=metrics_dict["composite_score"],
+                    avg_blink_duration=metrics_dict["avg_blink_duration"],
+                    interval_variability=metrics_dict["interval_variability"],
+                    data_quality=metrics_dict["data_quality"],
+                    system_status=metrics_dict["system_status"]
+                )
 
-            # 4. Evaluasi Scoring Komposit Mata Lelah & Kering
-            blink_event, metrics_dict = self.eye_analyzer.process_frame(
-                ear_value=avg_ear,
-                face_confidence=face_confidence,
-                timestamp=current_time
-            )
+                # 4. Evaluasi Perintah Hardware (LCD & Speaker)
+                eval_dict = {
+                    "fatigue": {"composite_score": metrics_dict["composite_score"], "status": metrics_dict["health_status"]},
+                    "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
+                    "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
+                }
+                hw_payload = self.hw_controller.evaluate(eval_dict)
+                trigger_text = hw_payload.get("robot_trigger", "normal")
 
-            # 5. Bangun payload fitur lengkap
-            features = self.feature_extractor.build_payload(
-                face_detected=face_detected,
-                timestamp=iso_time,
-                fps=fps,
-                ear=round(avg_ear, 3) if face_detected else 0.0,
-                eye_status=eye_status,
-                blink_count=metrics_dict["blink_count"],
-                lifetime_blinks=metrics_dict["lifetime_blinks"],
-                blink_rate=metrics_dict["smoothed_blink_rate"],
-                raw_blink_rate=metrics_dict["raw_blink_rate"],
-                closure_duration=metrics_dict["avg_blink_duration"],
-                perclos=metrics_dict["perclos"],
-                composite_score=metrics_dict["composite_score"],
-                avg_blink_duration=metrics_dict["avg_blink_duration"],
-                interval_variability=metrics_dict["interval_variability"],
-                data_quality=metrics_dict["data_quality"],
-                system_status=metrics_dict["system_status"]
-            )
+                # Kirim trigger pesan teks ke robot jika trigger service aktif
+                if self.trigger_service is not None and robot_id:
+                    self.trigger_service.send_trigger(robot_id, trigger_text)
 
-            # Evaluasi Hardware Command (LCD & Speaker)
-            eval_dict = {
-                "fatigue": {"status": metrics_dict["system_status"]},
-                "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
-                "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
-            }
-            hw_payload = self.hw_controller.evaluate(eval_dict)
-            trigger_text = hw_payload.get("robot_trigger", "normal")
+                features.update({
+                    "robot_id": robot_id,
+                    "frame_size_bytes": frame_size_bytes,
+                    "frame_size_kb": frame_size_kb,
+                    "frame_size_mb": frame_size_mb,
+                    "frame_size_formatted": f"{frame_size_mb:.4f} MB ({frame_size_kb:.1f} KB)",
+                    "distance": distance,
+                    "confidence": confidence,
+                    "health_status": metrics_dict["health_status"],
+                    "eye_conditions": metrics_dict["conditions"],
+                    "recommendations": metrics_dict["recommendations"],
+                    "hardware": hw_payload,
+                    "robot_trigger": trigger_text,
+                    "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
+                    "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
+                })
 
-            # Kirim trigger pesan teks ke robot jika trigger service aktif
-            if self.trigger_service is not None and robot_id:
-                self.trigger_service.send_trigger(robot_id, trigger_text)
+                # 5. Gambar Visualisasi Anotasi
+                annotated_frame = self.visualizer.draw_annotations(
+                    frame=frame,
+                    features=features,
+                    left_eye=left_eye,
+                    right_eye=right_eye
+                )
 
-            features.update({
-                "robot_id": robot_id,
-                "frame_size_bytes": frame_size_bytes,
-                "frame_size_kb": frame_size_kb,
-                "frame_size_mb": frame_size_mb,
-                "frame_size_formatted": f"{frame_size_mb:.4f} MB ({frame_size_kb:.1f} KB)",
-                "distance": distance,
-                "confidence": confidence,
-                "health_status": metrics_dict["health_status"],
-                "eye_conditions": metrics_dict["conditions"],
-                "recommendations": metrics_dict["recommendations"],
-                "hardware": hw_payload,
-                "robot_trigger": trigger_text,
-                "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
-                "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
-            })
+                # 6. Simpan hasil ke shared state (thread-safe) untuk endpoint debug
+                with self.lock:
+                    self.latest_features = features
+                    self.latest_annotated_frame = annotated_frame
 
-            # 6. Gambar Visualisasi Anotasi
-            annotated_frame = self.visualizer.draw_annotations(
-                frame=frame,
-                features=features,
-                left_eye=left_eye,
-                right_eye=right_eye
-            )
 
-            # 7. Simpan hasil ke shared state (thread-safe) untuk endpoint debug
-            with self.lock:
-                self.latest_features = features
-                self.latest_annotated_frame = annotated_frame
+                # 7. Push Channel A (real-time) ke BE
+                self.be_client.emit_realtime(
+                    robot_id=robot_id,
+                    distance=distance,
+                    confidence=confidence,
+                    blink_event=blink_event,
+                    timestamp=iso_time
+                )
 
-            # 8. Push Channel A (real-time) ke BE
-            self.be_client.emit_realtime(
-                robot_id=robot_id,
-                distance=distance,
-                confidence=confidence,
-                blink_event=blink_event,
-                timestamp=iso_time
-            )
-
-            # 9. Kirim data ke AggregatorService untuk Channel B (1 menit)
-            self.aggregator.ingest(
-                robot_id=robot_id,
-                distance=distance,
-                blink_event=blink_event,
-                blink_rate=metrics_dict["smoothed_blink_rate"],
-                health_status=metrics_dict["health_status"],
-                eye_conditions=metrics_dict["conditions"],
-                recommendations=metrics_dict["recommendations"],
-                perclos=metrics_dict["perclos"],
-                composite_score=metrics_dict["composite_score"]
-            )
+                # 8. Kirim data ke AggregatorService untuk Channel B (1 menit)
+                self.aggregator.ingest(
+                    robot_id=robot_id,
+                    distance=distance,
+                    blink_event=blink_event,
+                    blink_rate=metrics_dict["smoothed_blink_rate"],
+                    health_status=metrics_dict["health_status"],
+                    eye_conditions=metrics_dict["conditions"],
+                    recommendations=metrics_dict["recommendations"],
+                    perclos=metrics_dict["perclos"],
+                    composite_score=metrics_dict["composite_score"]
+                )
+            except Exception as e:
+                logger.error(f"Error pada vision pipeline loop: {e}", exc_info=True)
+                time.sleep(0.01)
 
     def get_latest_results(self) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
         with self.lock:
-            frame_copy = (
-                self.latest_annotated_frame.copy()
-                if self.latest_annotated_frame is not None
-                else None
-            )
+            if self.latest_annotated_frame is None:
+                return self.latest_features, None
+            
+            frame_copy = self.latest_annotated_frame.copy()
+            # Jika tidak ada frame baru selama > 2.5 detik, tampilkan status offline/waiting overlay
+            if time.time() - self.last_frame_time > 2.5 and frame_copy is not None:
+                h, w = frame_copy.shape[:2]
+                cv2.rectangle(frame_copy, (0, h // 2 - 30), (w, h // 2 + 30), (0, 0, 150), -1)
+                cv2.putText(
+                    frame_copy,
+                    "ESP32-CAM OFFLINE / WAITING FRAME...",
+                    (20, h // 2 + 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 255),
+                    2
+                )
             return self.latest_features, frame_copy
 
     def stop(self) -> None:

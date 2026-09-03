@@ -20,6 +20,8 @@ from flask_socketio import SocketIO
 
 import os
 import base64
+import numpy as np
+import cv2
 
 from services.robot_ws_handler import RobotWebSocketHandler
 from services.be_socket_client import BackendSocketClient
@@ -165,14 +167,18 @@ def on_esp32_frame(data):
     Menerima frame binary atau dict dari ESP32-CAM via event esp32_frame.
     """
     frame_bytes = data.get('frame') if isinstance(data, dict) else data
-    robot_id = data.get('robot_id', 'fadfa566') if isinstance(data, dict) else 'fadfa566'
+    robot_id = data.get('robot_id') if isinstance(data, dict) else None
     distance_json = data.get('distance_json', {}) if isinstance(data, dict) else {}
+
+    if not robot_id:
+        logger.warning("Payload esp32_frame ditolak: robot_id wajib disertakan.")
+        return
 
     if not isinstance(frame_bytes, (bytes, bytearray, memoryview)):
         return
 
     if not is_robot_registered(robot_id):
-        logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar.")
+        logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
         return
 
     frame_size = len(frame_bytes)
@@ -197,6 +203,7 @@ if sock is not None:
     def _handle_esp32_raw_websocket(ws):
         logger.info("ESP32-CAM raw WebSocket terhubung.")
         current_robot_id = None
+        frame_counter = 0
         try:
             # Kirim handshake response awal begitu terhubung
             try:
@@ -218,10 +225,16 @@ if sock is not None:
                     logger.info(f"ESP32-CAM teks diterima: '{message}'")
                     msg_lower = message.lower().strip()
                     if "ping" in msg_lower:
-                        ws.send("pong")
+                        try:
+                            ws.send("pong")
+                        except Exception:
+                            pass
                     else:
-                        ws.send("READY")
-                        ws.send("OK")
+                        try:
+                            ws.send("READY")
+                            ws.send("OK")
+                        except Exception:
+                            pass
                     continue
 
                 if not isinstance(message, (bytes, bytearray, memoryview)):
@@ -232,38 +245,82 @@ if sock is not None:
                 packet_size_bytes = len(packet)
                 packet_size_mb = packet_size_bytes / (1024 * 1024)
                 packet_size_kb = packet_size_bytes / 1024
-                logger.info(f"ESP32-CAM frame packet diterima: {packet_size_bytes} bytes ({packet_size_mb:.4f} MB / {packet_size_kb:.1f} KB)")
-                decoded = decode_websocket_packet(packet, 16)
-                if decoded is None:
-                    logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes)")
+
+                # ----------------------------------------------------------------
+                # Format binary ESP32 (wifiStreamTask.cpp):
+                #   Byte 0      : robot_id_len (uint8)
+                #   Byte 1..N   : robot_id (ASCII, panjang = robot_id_len)
+                #   Byte N+1    : is_dekat (0 atau 1)
+                #   Byte N+2..  : JPEG frame bytes
+                # ----------------------------------------------------------------
+                frame = None
+                robot_id = None
+                is_dekat = False
+
+                try:
+                    if len(packet) < 3:
+                        raise ValueError("Packet terlalu pendek")
+
+                    robot_id_len = packet[0]
+                    if len(packet) < 1 + robot_id_len + 1:
+                        raise ValueError(f"Packet terlalu pendek untuk robot_id_len={robot_id_len}")
+
+                    robot_id_raw = packet[1 : 1 + robot_id_len]
+                    robot_id = robot_id_raw.decode("ascii", errors="replace").strip("\x00").strip()
+                    if not robot_id:
+                        raise ValueError("robot_id kosong pada payload binary")
+
+                    is_dekat = bool(packet[1 + robot_id_len])
+                    jpeg_bytes = packet[1 + robot_id_len + 1 :]
+
+                    nparr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                except Exception as parse_err:
+                    # Fallback ke decode_websocket_packet jika format berbeda
+                    decoded = decode_websocket_packet(packet, 16)
+                    if decoded is not None:
+                        if len(decoded) == 3:
+                            robot_id, frame, is_dekat = decoded
+                        else:
+                            robot_id, frame = decoded
+                    else:
+                        logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes): {parse_err}")
+
+                if frame is None or not robot_id:
+                    logger.warning(f"ESP32-CAM frame decode gagal ({len(packet)} bytes)")
                     continue
 
-                is_dekat = False
-                if len(decoded) == 3:
-                    device_id, frame, is_dekat = decoded
-                else:
-                    device_id, frame = decoded
+                # Security Gate: Hanya robot yang terdaftar di database Backend yang diproses
+                if not is_robot_registered(robot_id):
+                    logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
+                    continue
 
-                robot_id = device_id if device_id and device_id != "UNKNOWN" else "dummyrobot01"
                 current_robot_id = robot_id
 
                 # Daftarkan socket aktif ke trigger service
                 robot_trigger_service.register_connection(robot_id, ws)
 
-                logger.info(f"ESP32-CAM decoded frame: shape={frame.shape if frame is not None else None}, device_id={device_id}, is_dekat={is_dekat}, size={packet_size_mb:.4f} MB")
+                frame_counter += 1
+                if frame_counter % 30 == 0:
+                    logger.info(
+                        f"ESP32-CAM streaming aktif: {frame_counter} frame "
+                        f"(robot_id={robot_id}, is_dekat={is_dekat}, size={packet_size_mb:.4f} MB, shape={frame.shape})"
+                    )
 
-                dist_str = "Dekat" if is_dekat else "Jauh"
+                distance_label = "Dekat" if is_dekat else "Jauh"
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,
                     frame=frame,
-                    distance_json={"distance": dist_str, "confidence": 95},
+                    distance_json={"distance": distance_label, "confidence": 95},
                     frame_size_bytes=packet_size_bytes
                 )
         except Exception as error:
-            logger.info(f"ESP32-CAM raw WebSocket terputus: {error}")
+            logger.info(f"ESP32-CAM raw WebSocket terputus setelah {frame_counter} frame: {error}")
         finally:
             if current_robot_id:
                 robot_trigger_service.unregister_connection(current_robot_id, ws)
+
 
     @sock.route('/ws')
     def handle_esp32_ws(ws):
@@ -381,29 +438,39 @@ def api_send_frame():
     Mendukung JSON payload dan Multipart / Form-Data.
     """
     try:
-        robot_id = "fadfa566"
+        robot_id = None
         distance = "Jauh"
         confidence = 90
         frame_bytes = None
 
         if request.is_json:
             data = request.get_json() or {}
-            robot_id = data.get('robot_id', robot_id)
+            robot_id = data.get('robot_id')
             distance_json = data.get('distance_json', {})
             distance = distance_json.get('distance', distance)
             confidence = distance_json.get('confidence', confidence)
             
-            frame_b64 = data.get('frame_base64')
-            if frame_b64:
+            frame_b64 = data.get('frame_base64') or data.get('frame')
+            if frame_b64 and isinstance(frame_b64, str):
                 if ',' in frame_b64:
                     frame_b64 = frame_b64.split(',')[1]
-                frame_bytes = base64.b64decode(frame_b64)
+                try:
+                    frame_bytes = base64.b64decode(frame_b64)
+                except Exception as e:
+                    logger.warning(f"Failed to decode base64 frame in /api/frame: {e}")
         else:
-            robot_id = request.form.get('robot_id', robot_id)
+            robot_id = request.form.get('robot_id')
             distance = request.form.get('distance', distance)
             confidence = int(request.form.get('confidence', confidence))
             if 'frame' in request.files:
                 frame_bytes = request.files['frame'].read()
+
+        if not robot_id:
+            return jsonify({
+                "success": False,
+                "error": "Field 'robot_id' wajib disertakan.",
+                "hint": "Kirimkan ID robot yang terdaftar di database Backend."
+            }), 400
 
         # Frame wajib ada — tidak boleh dibuat-buat secara sintetis
         if not frame_bytes:
@@ -413,11 +480,11 @@ def api_send_frame():
                 "hint": "Kirim file JPEG via multipart/form-data dengan field name 'frame'."
             }), 400
 
-        # Security Gate: Validasi apakah robot terdaftar di sistem
+        # Security Gate: Validasi apakah robot terdaftar di sistem database
         if not is_robot_registered(robot_id):
             return jsonify({
                 "success": False,
-                "error": f"Robot ID '{robot_id}' tidak terdaftar atau sedang inaktif. Silakan daftarkan perangkat di Dashboard terlebih dahulu."
+                "error": f"Robot ID '{robot_id}' tidak terdaftar atau sedang inaktif di database Backend. Silakan daftarkan perangkat di Dashboard terlebih dahulu."
             }), 403
 
         distance_payload = {"distance": distance, "confidence": confidence}
@@ -459,7 +526,19 @@ def api_trigger_summary():
     """
     try:
         data = request.get_json() or {}
-        robot_id = data.get('robot_id', 'fadfa566')
+        robot_id = data.get('robot_id')
+        if not robot_id:
+            return jsonify({
+                "success": False,
+                "error": "Field 'robot_id' wajib disertakan."
+            }), 400
+
+        if not is_robot_registered(robot_id):
+            return jsonify({
+                "success": False,
+                "error": f"Robot ID '{robot_id}' tidak terdaftar atau inaktif di database Backend."
+            }), 403
+
         near_sec = data.get('near_duration_sec', 40)
         far_sec = data.get('far_duration_sec', 20)
         blink_count = data.get('blink_count', 12)

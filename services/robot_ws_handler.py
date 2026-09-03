@@ -57,6 +57,21 @@ class RobotWebSocketHandler:
             distance_json (dict): Payload jarak dari robot: {distance, confidence}.
             frame_size_bytes (int, optional): Ukuran data frame dalam bytes.
         """
+        # Support both raw bytes & base64 string
+        if isinstance(frame_bytes, str):
+            try:
+                frame_bytes = base64.b64decode(frame_bytes)
+            except Exception as e:
+                logger.warning(f"[{robot_id}] Gagal decode base64 frame string: {e}")
+                return
+        elif isinstance(frame_bytes, (bytes, bytearray, memoryview)):
+            raw_b = bytes(frame_bytes)
+            if raw_b.startswith(b'/9j/'):  # Base64 string encoded as bytes
+                try:
+                    frame_bytes = base64.b64decode(raw_b)
+                except Exception:
+                    pass
+
         # Decode JPEG bytes → numpy array BGR (format OpenCV)
         nparr = np.frombuffer(frame_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)

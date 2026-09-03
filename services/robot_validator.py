@@ -38,15 +38,17 @@ def _validate_in_background(robot_id: str) -> None:
             else:
                 is_valid = False
     except urllib.error.HTTPError as e:
+        logger.warning(f"[{robot_id}] Validasi Backend gagal (HTTP {e.code}): Robot tidak valid/terdaftar.")
         is_valid = False
     except Exception as e:
         # Backend offline / tidak dapat dihubungi
+        logger.warning(f"[{robot_id}] Gagal menghubungi Backend untuk validasi ({e}).")
         ttl = OFFLINE_TTL_SEC
         with _lock:
             if robot_id in _cache:
                 is_valid = _cache[robot_id][0]
             else:
-                is_valid = (robot_id == "fadfa566")
+                is_valid = False
     finally:
         with _lock:
             _cache[robot_id] = (is_valid, now + ttl)
@@ -57,16 +59,18 @@ def is_robot_registered(robot_id: str) -> bool:
     """
     Mengecek apakah robot_id terdaftar dan berstatus 'active' di Backend.
     Non-blocking: selalu mengembalikan hasil dalam 0ms tanpa pernah menahan thread video.
+    Semua robot_id wajib tervalidasi oleh Backend (tidak ada bypass/hardcode).
 
     Args:
         robot_id (str): ID robot yang divalidasi.
 
     Returns:
-        bool: True jika valid & aktif, False jika tidak terdaftar / dinonaktifkan.
+        bool: True jika valid & aktif di database Backend, False jika tidak terdaftar / dinonaktifkan.
     """
-    if not robot_id:
+    if not robot_id or not isinstance(robot_id, str) or not robot_id.strip():
         return False
 
+    robot_id = robot_id.strip()
     now = time.time()
 
     with _lock:
@@ -78,15 +82,7 @@ def is_robot_registered(robot_id: str) -> bool:
                 threading.Thread(target=_validate_in_background, args=(robot_id,), daemon=True, name="robot-val-bg").start()
             return is_valid
 
-        # Jika robot bawaan/default belum di-cache, izinkan instan dan validasi di background
-        if robot_id == "fadfa566":
-            _cache[robot_id] = (True, now + CACHE_TTL_SEC)
-            if robot_id not in _in_flight:
-                _in_flight.add(robot_id)
-                threading.Thread(target=_validate_in_background, args=(robot_id,), daemon=True, name="robot-val-bg").start()
-            return True
-
-        # ID baru yang belum dikenal: mulai validasi di background
+        # ID baru yang belum ada di cache: picu validasi ke Backend
         if robot_id not in _in_flight:
             _in_flight.add(robot_id)
             threading.Thread(target=_validate_in_background, args=(robot_id,), daemon=True, name="robot-val-bg").start()

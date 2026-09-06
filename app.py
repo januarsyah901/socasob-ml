@@ -252,40 +252,18 @@ if sock is not None:
                 #   Byte 1..N   : robot_id (ASCII, panjang = robot_id_len)
                 #   Byte N+1    : is_dekat (0 atau 1)
                 #   Byte N+2..  : JPEG frame bytes
-                # ----------------------------------------------------------------
-                frame = None
-                robot_id = None
-                is_dekat = False
-
-                try:
-                    if len(packet) < 3:
-                        raise ValueError("Packet terlalu pendek")
-
-                    robot_id_len = packet[0]
-                    if len(packet) < 1 + robot_id_len + 1:
-                        raise ValueError(f"Packet terlalu pendek untuk robot_id_len={robot_id_len}")
-
-                    robot_id_raw = packet[1 : 1 + robot_id_len]
-                    robot_id = robot_id_raw.decode("ascii", errors="replace").strip("\x00").strip()
-                    if not robot_id:
-                        raise ValueError("robot_id kosong pada payload binary")
-
-                    is_dekat = bool(packet[1 + robot_id_len])
-                    jpeg_bytes = packet[1 + robot_id_len + 1 :]
-
-                    nparr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-                except Exception as parse_err:
-                    # Fallback ke decode_websocket_packet jika format berbeda
-                    decoded = decode_websocket_packet(packet, 16)
-                    if decoded is not None:
-                        if len(decoded) == 3:
-                            robot_id, frame, is_dekat = decoded
-                        else:
-                            robot_id, frame = decoded
+                decoded = decode_websocket_packet(packet, 16)
+                if decoded is not None:
+                    if len(decoded) == 3:
+                        robot_id, frame, is_dekat = decoded
                     else:
-                        logger.warning(f"ESP32-CAM gagal decode packet ({len(packet)} bytes): {parse_err}")
+                        robot_id, frame = decoded
+                        is_dekat = False
+
+                    if not robot_id or robot_id == "UNKNOWN":
+                        robot_id = "fadfa566"
+                else:
+                    robot_id, frame, is_dekat = None, None, False
 
                 if frame is None or not robot_id:
                     logger.warning(f"ESP32-CAM frame decode gagal ({len(packet)} bytes)")

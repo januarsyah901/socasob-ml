@@ -19,8 +19,8 @@ def decode_websocket_packet(
     """
     Decode paket biner dari ESP32-CAM.
     Mendukung 3 format:
-    1. Dynamic format robot: [id_len (1B)][device_id][is_dekat (1B)][JPEG]
-    2. Raw JPEG: [0xFF 0xD8 ...]
+    1. Dynamic format robot (firmware PEKAEM): [id_len (1B)][device_id][is_dekat (1B)][JPEG]
+    2. Raw JPEG / Dynamic ID (Mencari marker 0xFF 0xD8 secara dinamis)
     3. Legacy format: [device_id (N bytes)][JPEG]
     """
     if not packet or len(packet) < 4:
@@ -37,28 +37,37 @@ def decode_websocket_packet(
             if frame is not None:
                 return device_id, frame, is_dekat
 
-    # 2. Raw JPEG
-    if packet.startswith(b"\xff\xd8"):
+    # 2. Cari marker awal JPEG (0xFF 0xD8) secara dinamis
+    jpeg_start = packet.find(b"\xff\xd8")
+    if jpeg_start != -1:
+        if jpeg_start == 0:
+            device_id = "UNKNOWN"
+        else:
+            device_id_bytes = packet[:jpeg_start]
+            device_id = device_id_bytes.rstrip(b"\x00\r\n ").decode("ascii", errors="replace").strip()
+            if not device_id:
+                device_id = "UNKNOWN"
+
         frame = cv2.imdecode(
-            np.frombuffer(packet, dtype=np.uint8),
+            np.frombuffer(packet[jpeg_start:], dtype=np.uint8),
             cv2.IMREAD_COLOR,
         )
-        return ("UNKNOWN", frame, False) if frame is not None else None
+        if frame is not None:
+            return device_id, frame, False
 
-    # 3. Legacy Fixed-Size ID
-    if len(packet) <= device_id_size:
-        return None
+    # 3. Fallback jika marker 0xFFD8 tidak ditemukan langsung
+    if len(packet) > device_id_size:
+        device_id = packet[:device_id_size].rstrip(b"\x00\r\n ").decode(
+            "ascii", errors="replace"
+        ).strip()
+        frame = cv2.imdecode(
+            np.frombuffer(packet[device_id_size:], dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        if frame is not None:
+            return device_id, frame, False
 
-    device_id = packet[:device_id_size].rstrip(b"\x00").decode(
-        "ascii", errors="replace"
-    ).strip()
-    frame = cv2.imdecode(
-        np.frombuffer(packet[device_id_size:], dtype=np.uint8),
-        cv2.IMREAD_COLOR,
-    )
-    if frame is None:
-        return None
-    return device_id, frame, False
+    return None
 
 
 class ESP32Camera(BaseCamera):

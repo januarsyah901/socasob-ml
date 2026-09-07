@@ -39,11 +39,11 @@ class RobotWebSocketHandler:
         self.pipeline = pipeline_service
         self.lock = threading.Lock()
 
-        # Menyimpan frame dan distance_json terbaru yang belum diproses
-        self._pending_frame: np.ndarray | None = None
-        self._pending_distance_json: dict | None = None
-        self._pending_robot_id: str | None = None
-        self._pending_frame_size_bytes: int = 0
+        # Multi-robot: satu slot pending per robot_id (round-robin saat diambil).
+        # Bentuk: {robot_id: {"frame": np.ndarray, "distance_json": dict, "size": int}}
+        self._pending: dict = {}
+        self._order: list = []
+        self._rr_index: int = 0
         self._has_pending = threading.Event()
 
     def on_robot_frame(self, robot_id: str, frame_bytes: bytes, distance_json: dict, frame_size_bytes: int = None) -> None:
@@ -82,12 +82,16 @@ class RobotWebSocketHandler:
 
         size_bytes = frame_size_bytes if frame_size_bytes is not None else len(frame_bytes)
 
-        # Simpan frame terbaru (overwrite frame lama yang belum sempat diproses = frame-drop)
+        # Simpan frame terbaru per-robot (overwrite frame lama robot yang sama = frame-drop).
+        # Robot lain tidak tertimpa — masing-masing punya slot sendiri.
         with self.lock:
-            self._pending_frame = frame
-            self._pending_distance_json = distance_json
-            self._pending_robot_id = robot_id
-            self._pending_frame_size_bytes = size_bytes
+            self._pending[robot_id] = {
+                "frame": frame,
+                "distance_json": distance_json,
+                "size": size_bytes,
+            }
+            if robot_id not in self._order:
+                self._order.append(robot_id)
             self._has_pending.set()
 
         logger.debug(f"[{robot_id}] Frame diterima: {size_bytes} bytes ({size_bytes / (1024*1024):.4f} MB). distance={distance_json.get('distance')}")
@@ -100,37 +104,68 @@ class RobotWebSocketHandler:
             return
         size_bytes = frame_size_bytes if frame_size_bytes is not None else frame.nbytes
         with self.lock:
-            self._pending_frame = frame
-            self._pending_distance_json = distance_json or {}
-            self._pending_robot_id = robot_id
-            self._pending_frame_size_bytes = size_bytes
+            self._pending[robot_id] = {
+                "frame": frame,
+                "distance_json": distance_json or {},
+                "size": size_bytes,
+            }
+            if robot_id not in self._order:
+                self._order.append(robot_id)
             self._has_pending.set()
 
     def get_pending(self) -> tuple[str | None, np.ndarray | None, dict | None, int]:
         """
-        Mengambil frame + data terbaru yang menunggu untuk diproses.
+        Mengambil satu frame + data terbaru yang menunggu untuk diproses.
+        Multi-robot: round-robin antar robot_id agar tidak ada robot yang starvation.
         Dipanggil oleh VisionPipelineService dari thread pemprosesannya.
 
         Returns:
             Tuple (robot_id, frame, distance_json, frame_size_bytes) atau (None, None, None, 0) jika kosong.
         """
         with self.lock:
-            if self._pending_frame is None:
+            if not self._pending:
                 return None, None, None, 0
 
-            robot_id = self._pending_robot_id
-            frame = self._pending_frame.copy()
-            distance_json = self._pending_distance_json.copy() if self._pending_distance_json else {}
-            frame_size_bytes = self._pending_frame_size_bytes
+            # Bersihkan order dari robot yang sudah tidak punya pending
+            self._order = [r for r in self._order if r in self._pending]
+            for r in self._pending:
+                if r not in self._order:
+                    self._order.append(r)
+            if not self._order:
+                return None, None, None, 0
 
-            # Reset pending setelah diambil
-            self._pending_frame = None
-            self._pending_distance_json = None
-            self._pending_robot_id = None
-            self._pending_frame_size_bytes = 0
-            self._has_pending.clear()
+            self._rr_index %= len(self._order)
+            robot_id = self._order.pop(self._rr_index)
+            # _rr_index tetap (pop menggeser), clamp ke panjang baru
+            if self._order:
+                self._rr_index %= len(self._order)
+            else:
+                self._rr_index = 0
+
+            slot = self._pending.pop(robot_id, None)
+            if slot is None:
+                if not self._pending:
+                    self._has_pending.clear()
+                return None, None, None, 0
+
+            frame = slot["frame"].copy()
+            distance_json = dict(slot["distance_json"]) if slot["distance_json"] else {}
+            frame_size_bytes = slot["size"]
+
+            if not self._pending:
+                self._has_pending.clear()
 
             return robot_id, frame, distance_json, frame_size_bytes
+
+    def pending_count(self) -> int:
+        """Jumlah robot yang punya frame menunggu diproses."""
+        with self.lock:
+            return len(self._pending)
+
+    def pending_robots(self) -> list:
+        """Daftar robot_id yang punya frame menunggu diproses."""
+        with self.lock:
+            return list(self._pending.keys())
 
     def wait_for_frame(self, timeout: float = 1.0) -> bool:
         """

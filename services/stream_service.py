@@ -27,7 +27,7 @@ class StreamService:
         """
         self.pipeline = pipeline_service
 
-    def generate_frames(self) -> Generator[bytes, None, None]:
+    def generate_frames(self, robot_id: str | None = None) -> Generator[bytes, None, None]:
         """
         Fungsi generator untuk streaming MJPEG.
         
@@ -39,8 +39,9 @@ class StreamService:
             bytes: Data bit stream berisi header konten dan gambar JPEG.
         """
         while True:
-            # Mengambil tuple hasil dari pipeline (kita abaikan fitur dict-nya)
-            _, frame = self.pipeline.get_latest_results()
+            # Mengambil tuple hasil dari pipeline (kita abaikan fitur dict-nya).
+            # Bila robot_id diisi, stream frame robot tersebut; bila None, robot aktif terakhir.
+            _, frame = self.pipeline.get_latest_results(robot_id=robot_id)
             
             if frame is None:
                 # Jika belum ada frame dari kamera, berikan jeda singkat 

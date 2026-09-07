@@ -36,25 +36,31 @@ class AggregatorService:
         """
         self._on_summary = on_summary
         self._lock = threading.Lock()
-        self._reset_state()
+        # Multi-robot: satu bucket akumulasi per robot_id
+        self._buckets: dict = {}
+        self._period_start: str = get_current_iso_time()
 
         self._thread: threading.Thread | None = None
         self._running = False
 
+    def _new_bucket(self) -> dict:
+        return {
+            "near_sec": 0.0,
+            "far_sec": 0.0,
+            "blink_count": 0,
+            "blink_rate_samples": [],
+            "perclos_samples": [],
+            "composite_score_samples": [],
+            "health_statuses": [],
+            "eye_conditions": [],
+            "recommendations": [],
+            "last_frame_time": time.time(),
+        }
+
     def _reset_state(self) -> None:
-        """Reset semua counter untuk window baru."""
-        self._robot_id: str | None = None
-        self._period_start: str = get_current_iso_time()
-        self._near_sec: float = 0.0
-        self._far_sec: float = 0.0
-        self._blink_count: int = 0
-        self._blink_rate_samples: list[float] = []
-        self._perclos_samples: list[float] = []
-        self._composite_score_samples: list[float] = []
-        self._health_statuses: list[str] = []
-        self._eye_conditions: list[str] = []
-        self._recommendations: list[str] = []
-        self._last_frame_time: float = time.time()
+        """Reset semua bucket (kompatibilitas API lama)."""
+        self._buckets = {}
+        self._period_start = get_current_iso_time()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -101,36 +107,37 @@ class AggregatorService:
         current_time = time.time()
 
         with self._lock:
-            # Simpan robot_id dari frame pertama di window ini
-            if self._robot_id is None:
-                self._robot_id = robot_id
+            bucket = self._buckets.get(robot_id)
+            if bucket is None:
+                bucket = self._new_bucket()
+                self._buckets[robot_id] = bucket
 
             # Hitung delta waktu antar frame untuk akurasi durasi
-            delta = current_time - self._last_frame_time
+            delta = current_time - bucket["last_frame_time"]
             # Batasi delta maksimal 1 detik untuk mencegah jump jika lag
             delta = min(delta, 1.0)
-            self._last_frame_time = current_time
+            bucket["last_frame_time"] = current_time
 
             # Akumulasi durasi berdasarkan status jarak
             if distance == "Dekat":
-                self._near_sec += delta
+                bucket["near_sec"] += delta
             else:
-                self._far_sec += delta
+                bucket["far_sec"] += delta
 
             # Akumulasi blink
             if blink_event:
-                self._blink_count += 1
+                bucket["blink_count"] += 1
 
             # Simpan sample blink rate & komposit
             if blink_rate > 0:
-                self._blink_rate_samples.append(blink_rate)
-            self._perclos_samples.append(perclos)
-            self._composite_score_samples.append(composite_score)
+                bucket["blink_rate_samples"].append(blink_rate)
+            bucket["perclos_samples"].append(perclos)
+            bucket["composite_score_samples"].append(composite_score)
 
             # Simpan health status dan kondisi
-            self._health_statuses.append(health_status)
-            self._eye_conditions.extend(eye_conditions)
-            self._recommendations.extend(recommendations)
+            bucket["health_statuses"].append(health_status)
+            bucket["eye_conditions"].extend(eye_conditions)
+            bucket["recommendations"].extend(recommendations)
 
     # ------------------------------------------------------------------
     # Summary Flush
@@ -138,78 +145,77 @@ class AggregatorService:
 
     def _flush_summary(self) -> None:
         """
-        Hitung payload ringkasan dari data yang terakumulasi,
-        panggil callback, lalu reset state untuk window berikutnya.
+        Hitung payload ringkasan per robot dari data yang terakumulasi,
+        panggil callback untuk tiap robot, lalu reset bucket untuk window berikutnya.
         """
         with self._lock:
-            robot_id = self._robot_id
+            if not self._buckets:
+                logger.info("[Aggregator] Tidak ada data dalam window ini. Summary dilewati.")
+                self._period_start = get_current_iso_time()
+                return
+            items = list(self._buckets.items())
+            self._buckets = {}
             period_start = self._period_start
-            near_sec = round(self._near_sec)
-            far_sec = round(self._far_sec)
+            self._period_start = get_current_iso_time()
+
+        period_end = get_current_iso_time()
+        for robot_id, b in items:
+            near_sec = round(b["near_sec"])
+            far_sec = round(b["far_sec"])
             total_sec = near_sec + far_sec
-            blink_count = self._blink_count
+            blink_count = b["blink_count"]
             avg_blink_rate = round(
-                sum(self._blink_rate_samples) / len(self._blink_rate_samples), 2
-            ) if self._blink_rate_samples else 0.0
-            
+                sum(b["blink_rate_samples"]) / len(b["blink_rate_samples"]), 2
+            ) if b["blink_rate_samples"] else 0.0
+
             avg_perclos = round(
-                sum(self._perclos_samples) / len(self._perclos_samples), 3
-            ) if self._perclos_samples else 0.0
-            
+                sum(b["perclos_samples"]) / len(b["perclos_samples"]), 3
+            ) if b["perclos_samples"] else 0.0
+
             avg_composite_score = round(
-                sum(self._composite_score_samples) / len(self._composite_score_samples), 1
-            ) if self._composite_score_samples else 0.0
+                sum(b["composite_score_samples"]) / len(b["composite_score_samples"]), 1
+            ) if b["composite_score_samples"] else 0.0
 
             dominant_distance = "Dekat" if near_sec >= far_sec else "Jauh"
 
             # Ambil health_status yang paling sering muncul
             health_status = "Aman"
-            if self._health_statuses:
+            if b["health_statuses"]:
                 health_status = max(
-                    set(self._health_statuses),
-                    key=self._health_statuses.count
+                    set(b["health_statuses"]),
+                    key=b["health_statuses"].count
                 )
 
             # Deduplicate kondisi dan rekomendasi
-            eye_conditions = list(dict.fromkeys(self._eye_conditions))
-            recommendations = list(dict.fromkeys(self._recommendations))
+            eye_conditions = list(dict.fromkeys(b["eye_conditions"]))
+            recommendations = list(dict.fromkeys(b["recommendations"]))
 
             near_percentage = round((near_sec / total_sec) * 100, 1) if total_sec > 0 else 0.0
 
-            period_end = get_current_iso_time()
+            summary = {
+                "robot_id": robot_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "near_duration_sec": near_sec,
+                "far_duration_sec": far_sec,
+                "near_percentage": near_percentage,
+                "blink_count": blink_count,
+                "avg_blink_rate": avg_blink_rate,
+                "avg_perclos": avg_perclos,
+                "avg_fatigue_score": avg_composite_score,
+                "dominant_distance": dominant_distance,
+                "health_status": health_status,
+                "eye_conditions": eye_conditions,
+                "recommendations": recommendations
+            }
 
-        if robot_id is None:
-            logger.info("[Aggregator] Tidak ada data dalam window ini. Summary dilewati.")
-            self._reset_state()
-            return
+            logger.info(
+                f"[Aggregator] Summary robot={robot_id} | "
+                f"Dekat={near_sec}s | Jauh={far_sec}s | Blink={blink_count} | FatigueScore={avg_composite_score}"
+            )
 
-        summary = {
-            "robot_id": robot_id,
-            "period_start": period_start,
-            "period_end": period_end,
-            "near_duration_sec": near_sec,
-            "far_duration_sec": far_sec,
-            "near_percentage": near_percentage,
-            "blink_count": blink_count,
-            "avg_blink_rate": avg_blink_rate,
-            "avg_perclos": avg_perclos,
-            "avg_fatigue_score": avg_composite_score,
-            "dominant_distance": dominant_distance,
-            "health_status": health_status,
-            "eye_conditions": eye_conditions,
-            "recommendations": recommendations
-        }
-
-        logger.info(
-            f"[Aggregator] Summary robot={robot_id} | "
-            f"Dekat={near_sec}s | Jauh={far_sec}s | Blink={blink_count} | FatigueScore={avg_composite_score}"
-        )
-
-        # Panggil callback (emit ke BE)
-        try:
-            self._on_summary(summary)
-        except Exception as e:
-            logger.error(f"[Aggregator] Error saat memanggil on_summary callback: {e}")
-
-        # Reset untuk window berikutnya
-        self._reset_state()
+            # Panggil callback (emit ke BE)
+            try:
+                self._on_summary(summary)
+            except Exception as e:
+                logger.error(f"[Aggregator] Error saat memanggil on_summary callback: {e}")

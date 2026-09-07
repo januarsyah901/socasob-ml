@@ -79,12 +79,16 @@ stream_service = StreamService(pipeline_service)
 # 3. Background Worker & Services Initialization
 # ==========================================
 def sync_features():
-    """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug."""
+    """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug (semua robot)."""
     import time
     while True:
-        features, _ = pipeline_service.get_latest_results()
-        if features:
-            feature_store.update(features)
+        try:
+            all_res = pipeline_service.get_all_results()
+            for _rid, features in all_res.items():
+                if features:
+                    feature_store.update(features)
+        except Exception:
+            pass
         time.sleep(0.03)  # ~30ms
 
 def start_background_services():
@@ -327,20 +331,50 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    """MJPEG stream debug — menampilkan frame terakhir yang diproses."""
+    """MJPEG stream debug — frame terakhir robot yang dipilih (query ?robot_id=, default: aktif terakhir)."""
+    robot_id = request.args.get('robot_id')
     return Response(
-        stream_service.generate_frames(),
+        stream_service.generate_frames(robot_id=robot_id),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+
+@app.route('/api/robots', methods=['GET'])
+def api_robots():
+    """Daftar robot yang pernah mengirim frame + status aktif. Untuk tab dashboard multi-robot."""
+    robots = pipeline_service.list_robots()
+    # Gabungkan info store (fallback bila pipeline belum ada state tapi store ada)
+    try:
+        store_robots = {r["robot_id"]: r for r in feature_store.list_robots()}
+        for r in robots:
+            if r["robot_id"] in store_robots:
+                s = store_robots[r["robot_id"]]
+                r["last_seen"] = max(r["last_seen"] or 0, s["last_seen"] or 0)
+                r["is_active"] = r["is_active"] or s["is_active"]
+        for rid, s in store_robots.items():
+            if not any(r["robot_id"] == rid for r in robots):
+                robots.append(s)
+        robots.sort(key=lambda r: r.get("last_seen") or 0, reverse=True)
+    except Exception:
+        pass
+    return jsonify({"success": True, "data": robots, "count": len(robots)})
 
 @app.route('/api/features', methods=['GET'])
 def api_features():
     """
-    Endpoint debug JSON — menampilkan fitur terakhir yang diekstrak dari pipeline CV.
+    Endpoint debug JSON — fitur terakhir pipeline CV.
+    Query opsional ?robot_id= untuk tab multi-robot (default: robot aktif terakhir).
     Mengembalikan 404 jika belum ada robot yang connect dan mengirim frame.
     """
-    data = feature_store.get()
+    robot_id = request.args.get('robot_id')
+    data = feature_store.get(robot_id=robot_id)
     if data is None:
+        if robot_id:
+            return jsonify({
+                "success": False,
+                "error": f"Belum ada data fitur untuk robot '{robot_id}'.",
+                "hint": "Pastikan robot_id benar dan robot sudah mengirim frame.",
+                "robot_id": robot_id,
+            }), 404
         return jsonify({
             "success": False,
             "error": "Belum ada data fitur. Robot belum connect atau belum ada frame yang diproses.",
@@ -580,7 +614,13 @@ def api_config():
             val = float(data['ear_threshold'])
             if 0.1 <= val <= 0.5:
                 settings.EAR_THRESHOLD = val
-                updated['ear_threshold'] = val
+                # Propagasi live ke semua analyzer robot aktif
+                try:
+                    n = pipeline_service.set_ear_threshold(val)
+                    updated['ear_threshold'] = val
+                    updated['robots_updated'] = n
+                except Exception:
+                    updated['ear_threshold'] = val
 
         if 'consec_frames' in data:
             val = int(data['consec_frames'])
@@ -624,14 +664,17 @@ def api_config():
 @app.route('/api/pipeline/status', methods=['GET'])
 def api_pipeline_status():
     """
-    Ambil status detail pipeline CV.
+    Ambil status detail pipeline CV (opsional ?robot_id= untuk tab multi-robot).
     """
-    data = feature_store.get()
+    robot_id = request.args.get('robot_id')
+    data = feature_store.get(robot_id=robot_id)
     return jsonify({
         "success": True,
         "data": {
             "be_connected": be_client.is_connected,
             "be_url": settings.BE_URL,
+            "robot_id": robot_id,
+            "robots": pipeline_service.list_robots(),
             "last_features": data,
             "has_active_frame": data is not None
         }

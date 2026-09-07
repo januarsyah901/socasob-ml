@@ -2,6 +2,7 @@
 
 import threading
 import time
+import cv2
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
 
@@ -44,28 +45,60 @@ class VisionPipelineService:
         self.aggregator = aggregator_service
         self.trigger_service = trigger_service
 
-        # Inisialisasi modul-modul CV
+        # Inisialisasi modul-modul CV (shared, stateless antar robot)
         self.face_mesh = FaceMeshDetector()
-        self.eye_analyzer = EyeConditionAnalyzer(
-            ear_threshold=getattr(settings, 'EAR_THRESHOLD', 0.23),
-            window_seconds=60,
-            required_consecutive=3,
-            min_data_quality=0.7,
-            baseline_rate=17.0
-        )
-        self.feature_extractor = FeatureExtractor()
         self.visualizer = Visualizer()
         self.fps_counter = FPSCounter()
-        self.hw_controller = HardwareActuatorController()
 
-        # Shared state untuk hasil akhir (thread-safe) — untuk endpoint debug
+        # Multi-robot: state per robot_id (analyzer window 60s, hw state machine,
+        # feature extractor last-state, hasil terakhir). Dibuat lazy saat robot
+        # pertama kali mengirim frame.
+        self._robots: Dict[str, Dict[str, Any]] = {}
+        self._last_active_robot: Optional[str] = None
+        self.lock = threading.Lock()
+
+        # Kompatibilitas: properti lama tetap ada (mengarah ke robot aktif terakhir)
         self.latest_features: Dict[str, Any] = {}
         self.latest_annotated_frame: Optional[np.ndarray] = None
-        self.lock = threading.Lock()
 
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
         self.last_frame_time = 0.0
+
+    def _get_robot_state(self, robot_id: str) -> Dict[str, Any]:
+        """Ambil/buat state per-robot (analyzer + hw + extractor + hasil)."""
+        st = self._robots.get(robot_id)
+        if st is None:
+            st = {
+                "analyzer": EyeConditionAnalyzer(
+                    ear_threshold=getattr(settings, 'EAR_THRESHOLD', 0.23),
+                    window_seconds=60,
+                    required_consecutive=3,
+                    min_data_quality=0.7,
+                    baseline_rate=17.0,
+                ),
+                "hw": HardwareActuatorController(),
+                "extractor": FeatureExtractor(),
+                "features": {},
+                "frame": None,
+                "last_time": 0.0,
+            }
+            self._robots[robot_id] = st
+            logger.info(f"[Pipeline] State baru dibuat untuk robot={robot_id}")
+        return st
+
+    def set_ear_threshold(self, value: float) -> int:
+        """Propagasi EAR threshold ke semua analyzer robot aktif. Return jumlah robot terupdate."""
+        count = 0
+        with self.lock:
+            for st in self._robots.values():
+                try:
+                    st["analyzer"].detector.ear_threshold = value
+                    st["analyzer"].threshold = value
+                    count += 1
+                except Exception:
+                    pass
+        return count
 
     def start(self) -> None:
         if self.is_running:
@@ -105,6 +138,12 @@ class VisionPipelineService:
 
                 current_time = time.time()
                 self.last_frame_time = current_time
+                # Ambil state per-robot (analyzer window, hw, extractor terpisah)
+                with self.lock:
+                    rst = self._get_robot_state(robot_id)
+                    analyzer = rst["analyzer"]
+                    extractor = rst["extractor"]
+                    hw_controller = rst["hw"]
                 iso_time = get_current_iso_time()
                 fps = self.fps_counter.update()
 
@@ -126,17 +165,17 @@ class VisionPipelineService:
                     ear_left = calculate_ear(left_eye)
                     ear_right = calculate_ear(right_eye)
                     avg_ear = (ear_left + ear_right) / 2.0
-                    eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
+                    eye_status = "Closed" if avg_ear < analyzer.detector.ear_threshold else "Open"
 
-                # 2. Analisis Kondisi Mata
-                blink_event, metrics_dict = self.eye_analyzer.process_frame(
+                # 2. Analisis Kondisi Mata (per-robot window)
+                blink_event, metrics_dict = analyzer.process_frame(
                     ear_value=avg_ear,
                     face_confidence=face_confidence,
                     timestamp=current_time
                 )
 
-                # 3. Ekstraksi Payload Fitur Terstandar
-                features = self.feature_extractor.build_payload(
+                # 3. Ekstraksi Payload Fitur Terstandar (per-robot last-state)
+                features = extractor.build_payload(
                     face_detected=face_detected,
                     timestamp=iso_time,
                     fps=fps,
@@ -161,7 +200,7 @@ class VisionPipelineService:
                     "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
                     "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
                 }
-                hw_payload = self.hw_controller.evaluate(eval_dict)
+                hw_payload = hw_controller.evaluate(eval_dict)
                 trigger_text = hw_payload.get("robot_trigger", "normal")
 
                 # Kirim trigger pesan teks ke robot jika trigger service aktif
@@ -193,8 +232,13 @@ class VisionPipelineService:
                     right_eye=right_eye
                 )
 
-                # 6. Simpan hasil ke shared state (thread-safe) untuk endpoint debug
+                # 6. Simpan hasil ke state per-robot (thread-safe) untuk endpoint debug
                 with self.lock:
+                    rst["features"] = features
+                    rst["frame"] = annotated_frame
+                    rst["last_time"] = current_time
+                    self._last_active_robot = robot_id
+                    # Kompatibilitas: properti lama = robot aktif terakhir
                     self.latest_features = features
                     self.latest_annotated_frame = annotated_frame
 
@@ -224,14 +268,23 @@ class VisionPipelineService:
                 logger.error(f"Error pada vision pipeline loop: {e}", exc_info=True)
                 time.sleep(0.01)
 
-    def get_latest_results(self) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    def get_latest_results(self, robot_id: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+        """Hasil terakhir untuk satu robot (atau robot aktif terakhir bila None)."""
         with self.lock:
-            if self.latest_annotated_frame is None:
-                return self.latest_features, None
-            
-            frame_copy = self.latest_annotated_frame.copy()
-            # Jika tidak ada frame baru selama > 2.5 detik, tampilkan status offline/waiting overlay
-            if time.time() - self.last_frame_time > 2.5 and frame_copy is not None:
+            rst = None
+            if robot_id and robot_id in self._robots:
+                rst = self._robots[robot_id]
+            elif self._last_active_robot and self._last_active_robot in self._robots:
+                rst = self._robots[self._last_active_robot]
+            if rst is None or rst["frame"] is None:
+                # Fallback kompatibilitas lama
+                if self.latest_annotated_frame is None:
+                    return self.latest_features, None
+                return self.latest_features, self.latest_annotated_frame.copy()
+
+            frame_copy = rst["frame"].copy()
+            # Jika tidak ada frame baru robot ini selama > 2.5 detik, overlay offline
+            if time.time() - rst["last_time"] > 2.5 and frame_copy is not None:
                 h, w = frame_copy.shape[:2]
                 cv2.rectangle(frame_copy, (0, h // 2 - 30), (w, h // 2 + 30), (0, 0, 150), -1)
                 cv2.putText(
@@ -243,7 +296,28 @@ class VisionPipelineService:
                     (255, 255, 255),
                     2
                 )
-            return self.latest_features, frame_copy
+            return rst["features"], frame_copy
+
+    def get_all_results(self) -> Dict[str, Dict[str, Any]]:
+        """Semua fitur terakhir per robot_id (tanpa frame)."""
+        with self.lock:
+            return {rid: dict(st["features"]) for rid, st in self._robots.items() if st["features"]}
+
+    def list_robots(self, active_sec: float = 30.0) -> list:
+        """Daftar robot yang pernah mengirim frame + flag aktif + waktu terakhir."""
+        now = time.time()
+        with self.lock:
+            out = []
+            for rid, st in self._robots.items():
+                last = st["last_time"]
+                out.append({
+                    "robot_id": rid,
+                    "last_seen": last,
+                    "is_active": (now - last) <= active_sec if last else False,
+                    "has_data": bool(st["features"]),
+                })
+            out.sort(key=lambda r: r["last_seen"], reverse=True)
+            return out
 
     def stop(self) -> None:
         logger.info("Menghentikan VisionPipelineService...")

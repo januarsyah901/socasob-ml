@@ -64,6 +64,13 @@ h1.hero{margin:0;font-size:1.5rem;line-height:1.2;font-weight:800;letter-spacing
 .trig{font-size:11px;font-weight:800;padding:.4rem .8rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer}
 .trig:hover{background:var(--surface-2);color:var(--text)}
 .trig.active{background:var(--color-signal-blue);color:#fff;border-color:transparent}
+/* robot tabs */
+.tabs{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.tab{display:inline-flex;align-items:center;gap:.5rem;font-size:.78rem;font-weight:700;padding:.55rem .95rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer}
+.tab:hover{background:var(--surface-2);color:var(--text)}
+.tab.active{background:var(--color-signal-blue);border-color:transparent;color:#fff}
+.tab.active .mono{color:rgba(255,255,255,.8)}
+.tab .mono{font-size:.65rem}
 /* banner */
 .banner{display:flex;align-items:center;justify-content:space-between;gap:.75rem;border-radius:1rem;padding:.85rem 1.1rem;border:1px solid var(--border);background:var(--surface-2);font-size:.85rem;font-weight:600}
 .banner .left{display:flex;align-items:center;gap:.7rem}
@@ -150,6 +157,12 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
         <button class="trig" data-trig="dry">dry</button>
       </div>
     </div>
+  </div>
+
+  <!-- Robot tabs (multi-robot) -->
+  <div class="card-sm pad" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:.6rem"><i data-lucide="bot" style="width:18px;height:18px;color:var(--color-signal-blue)"></i><b style="font-size:.85rem">Robot Aktif</b><span id="robot-count" class="tag mut">0</span></div>
+    <div class="tabs" id="robot-tabs"><span class="desc">Memuat daftar robot…</span></div>
   </div>
 
   <!-- Connection banner (mirror connection-banner.tsx) -->
@@ -289,7 +302,29 @@ const $=id=>document.getElementById(id);
 function applyTheme(){const t=localStorage.getItem('socasob-theme')||'light';document.documentElement.classList.toggle('dark',t==='dark');const b=$('theme-btn');if(b)b.innerHTML=`<i data-lucide="${t==='dark'?'moon':'sun'}"></i>`;if(window.lucide)lucide.createIcons();}
 $('theme-btn').onclick=()=>{const n=(localStorage.getItem('socasob-theme')||'light')==='dark'?'light':'dark';localStorage.setItem('socasob-theme',n);applyTheme();};
 applyTheme();
+// Multi-robot tabs: robot terpilih disimpan di localStorage, polling + video per robot.
+let selRobot=localStorage.getItem('socasob-ml-robot')||null;
 let workSec=0,lastOk=0,hasData=false;
+const workCache={};
+function setVideoSrc(){const img=document.querySelector('.video-frame');if(!img)return;img.src=selRobot?('/video_feed?robot_id='+encodeURIComponent(selRobot)+'&_='+Date.now()):('/video_feed?_='+Date.now());}
+// manual trigger (kirim robot_id terpilih)
+document.querySelectorAll('#trig-row .trig').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('#trig-row .trig').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const body={trigger:btn.dataset.trig};if(selRobot)body.robot_id=selRobot;fetch('/api/robot/trigger-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});};});
+function renderTabs(robots){
+  const box=$('robot-tabs');$('robot-count').textContent=robots.length;
+  if(!robots.length){box.innerHTML='<span class="desc">Belum ada robot — kirim frame via WS / POST /api/frame.</span>';return;}
+  if(selRobot&&!robots.some(r=>r.robot_id===selRobot)){/* robot terpilih hilang, fallback ke terbaru */selRobot=robots[0].robot_id;localStorage.setItem('socasob-ml-robot',selRobot);setVideoSrc();}
+  if(!selRobot){selRobot=robots[0].robot_id;localStorage.setItem('socasob-ml-robot',selRobot);setVideoSrc();}
+  box.innerHTML='';
+  robots.forEach(r=>{
+    const b=document.createElement('button');
+    b.className='tab'+(r.robot_id===selRobot?' active':'');
+    b.innerHTML=`<span class="dot ${r.is_active?'on':''}"></span><span>${r.robot_id}</span>`;
+    b.onclick=()=>{selRobot=r.robot_id;localStorage.setItem('socasob-ml-robot',selRobot);workSec=workCache[selRobot]||0;hasData=false;renderTabs(robots);setVideoSrc();poll();};
+    box.appendChild(b);
+  });
+}
+function fetchRobots(){fetch('/api/robots').then(r=>r.json()).then(res=>{renderTabs(res.data||[]);}).catch(()=>{});}
+setInterval(fetchRobots,2000);fetchRobots();
 const fmt2=n=>String(n).padStart(2,'0');
 function fmtDur(s){s=Math.max(0,Math.floor(s||0));const m=Math.floor(s/60),r=s%60;return m>0?`${m}m ${r}s`:`${r}s`;}
 function tick(){if(hasData&&Date.now()-lastOk<3000){workSec++;}const h=Math.floor(workSec/3600),m=Math.floor(workSec%3600/60),s=workSec%60;$('t-h').textContent=fmt2(h);$('t-m').textContent=fmt2(m);$('t-s').textContent=fmt2(s);$('t-total').textContent=h*60+m;}
@@ -298,8 +333,7 @@ setInterval(tick,1000);
 fetch('/api/config').then(r=>r.json()).then(res=>{const v=res.data&&res.data.ear_threshold;if(v){$('threshold-slider').value=v;$('threshold-label').textContent=Number(v).toFixed(2);}}).catch(()=>{});
 $('threshold-slider').addEventListener('input',e=>{$('threshold-label').textContent=Number(e.target.value).toFixed(2);});
 $('threshold-slider').addEventListener('change',e=>{fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ear_threshold:Number(e.target.value)})}).catch(()=>{});});
-// manual trigger (same endpoint as BE)
-document.querySelectorAll('#trig-row .trig').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('#trig-row .trig').forEach(b=>b.classList.remove('active'));btn.classList.add('active');fetch('/api/robot/trigger-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trigger:btn.dataset.trig})}).catch(()=>{});};});
+// manual trigger note: handler dipindah ke blok tabs di atas
 // health
 function checkHealth(){fetch('/health').then(r=>r.json()).then(()=>{$('be-dot').className='dot on';$('be-text').textContent='ML Online';}).catch(()=>{$('be-dot').className='dot off';$('be-text').textContent='ML Offline';});}
 setInterval(checkHealth,5000);checkHealth();
@@ -309,7 +343,8 @@ const SPK={cling:'Cling (Startup)','bip-bip':'Bip-Bip (Lelah 10m)','ting-tong':'
 function setConn(mode,robot){const b=$('conn-banner');b.className='banner'+(mode==='ok'?' ok':mode==='warn'?' warn':mode==='err'?' err':'');const t={ok:'Robot Aktif — Data Real-time',wait:'Menunggu data dari Robot',none:'Perangkat Belum Dipilih — kirim frame via WS / POST /api/frame',err:'ML Tidak Terhubung'}[mode];$('conn-text').textContent=t;$('conn-dot').className='dot '+(mode==='ok'?'on':mode==='err'?'off':'');$('conn-robot').textContent=robot||'-';}
 function setTag(el,txt,cls){el.textContent=txt;el.className='tag '+cls;}
 function poll(){
-fetch('/api/features').then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
+const url=selRobot?('/api/features?robot_id='+encodeURIComponent(selRobot)):'/api/features';
+fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   const d=res.data||res;if(!d)throw 0;
   hasData=true;lastOk=Date.now();
   $('json-output').textContent=JSON.stringify(res,null,2);
@@ -340,8 +375,9 @@ fetch('/api/features').then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   const ear=Number(d.ear||0);$('ear-value').textContent=ear.toFixed(3);
   $('eye-status').textContent=d.eye_status||'N/A';
   const eb=$('ear-bar');eb.style.width=Math.min(100,ear/0.4*100)+'%';eb.style.background=(d.eye_status==='Closed')?'var(--color-error)':'var(--color-signal-blue)';
-  // timers
+  // timers (cache per-robot agar pindah tab tidak reset angka)
   workSec=hw.work_elapsed_sec??d.work_elapsed_sec??workSec;
+  if(selRobot)workCache[selRobot]=workSec;
   const brs=hw.break_remaining_sec??d.break_remaining_sec??0;
   const fds=hw.fatigue_duration_sec??0;
   $('work-elapsed-time').textContent=fmtDur(workSec);
@@ -365,7 +401,7 @@ fetch('/api/features').then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('sync-tag').textContent='Aktuator Sync';$('sync-tag').className='tag ok';
   $('sys-mini').textContent='Aktif';$('sys-dot').className='dot on';$('cam-mini').textContent='Terhubung';$('cam-dot').className='dot on';
   if(window.lucide)lucide.createIcons();
-}).catch(()=>{hasData=false;$('poll-age').textContent='';setConn('wait',$('conn-robot').textContent!=='-'?$('conn-robot').textContent:null);setTag($('eye-badge'),'Tidak Terhubung','mut');$('sync-tag').textContent='Offline';$('sync-tag').className='tag mut';$('sys-mini').textContent='Offline';$('cam-mini').textContent='Terputus';});}
+}).catch(()=>{hasData=false;$('poll-age').textContent='';const lbl=selRobot||($('conn-robot').textContent!=='-'?$('conn-robot').textContent:null);if(!selRobot&&!lbl){setConn('none',null);}else{setConn('wait',lbl);}setTag($('eye-badge'),'Tidak Terhubung','mut');$('sync-tag').textContent='Offline';$('sync-tag').className='tag mut';$('sys-mini').textContent='Offline';$('cam-mini').textContent='Terputus';});}
 setInterval(poll,500);poll();
 if(window.lucide)lucide.createIcons();
 </script>

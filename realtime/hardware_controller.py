@@ -222,6 +222,7 @@ class HardwareActuatorController:
             "target": "hardware",
             "lcd_command": lcd,
             "robot_trigger": self.to_robot_trigger(lcd),
+            "face_code": FACE_CODE_MAP.get(lcd, "ROBOT_FACE_1_NEUTRAL"),
             "speaker_command": speaker,
             "lcd_label": lcd_label,
             "speaker_label": speaker_label,
@@ -229,4 +230,12 @@ class HardwareActuatorController:
             "break_remaining_sec": round(break_rem, 1),
             "timestamp": time.time(),
         }
+
+FACE_CODE_MAP = {
+    "normal": "ROBOT_FACE_1_NEUTRAL",
+    "fatigue_5m": "ROBOT_FACE_2_SAD",
+    "fatigue_10m": "ROBOT_FACE_5_ALERT",
+    "break_20m": "ROBOT_FACE_4_HAPPY",
+    "dry_eye": "ROBOT_FACE_3_ANGRY"
+}
 

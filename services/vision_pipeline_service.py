@@ -18,8 +18,10 @@ from utils.logger import get_logger
 from config import settings
 
 from realtime.hardware_controller import HardwareActuatorController
+from scoring.active_myopia_guard import ActiveMyopiaGuard
 
 logger = get_logger(__name__)
+
 
 
 class VisionPipelineService:
@@ -49,6 +51,9 @@ class VisionPipelineService:
         self.face_mesh = FaceMeshDetector()
         self.visualizer = Visualizer()
         self.fps_counter = FPSCounter()
+        self.hw_controller = HardwareActuatorController()
+        self.myopia_guard = ActiveMyopiaGuard()
+
 
         # Multi-robot: state per robot_id (analyzer window 60s, hw state machine,
         # feature extractor last-state, hasil terakhir). Dibuat lazy saat robot
@@ -195,10 +200,17 @@ class VisionPipelineService:
                 )
 
                 # 4. Evaluasi Perintah Hardware (LCD & Speaker)
+                dist_cm = 40.0 if distance == "Dekat" else 60.0
+                myopia_res = self.myopia_guard.update(
+                    face_detected=face_detected,
+                    distance_cm=dist_cm,
+                    timestamp=current_time
+                )
+
                 eval_dict = {
                     "fatigue": {"composite_score": metrics_dict["composite_score"], "status": metrics_dict["health_status"]},
                     "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
-                    "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
+                    "myopia_risk": myopia_res
                 }
                 hw_payload = hw_controller.evaluate(eval_dict)
                 trigger_text = hw_payload.get("robot_trigger", "normal")
@@ -206,6 +218,9 @@ class VisionPipelineService:
                 # Kirim trigger pesan teks ke robot jika trigger service aktif
                 if self.trigger_service is not None and robot_id:
                     self.trigger_service.send_trigger(robot_id, trigger_text)
+
+                # Kirim perintah hardware langsung ke Robot (WebSocket)
+                self.robot_ws.send_hardware_command(robot_id, hw_payload)
 
                 features.update({
                     "robot_id": robot_id,
@@ -220,8 +235,9 @@ class VisionPipelineService:
                     "recommendations": metrics_dict["recommendations"],
                     "hardware": hw_payload,
                     "robot_trigger": trigger_text,
-                    "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
-                    "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
+                    "work_elapsed_sec": myopia_res.get("work_elapsed_sec", 0),
+                    "break_remaining_sec": myopia_res.get("break_remaining_sec", 0)
+
                 })
 
                 # 5. Gambar Visualisasi Anotasi
@@ -249,8 +265,10 @@ class VisionPipelineService:
                     distance=distance,
                     confidence=confidence,
                     blink_event=blink_event,
-                    timestamp=iso_time
+                    timestamp=iso_time,
+                    hardware_payload=hw_payload
                 )
+
 
                 # 8. Kirim data ke AggregatorService untuk Channel B (1 menit)
                 self.aggregator.ingest(

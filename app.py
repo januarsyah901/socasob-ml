@@ -58,7 +58,8 @@ from services.robot_trigger_service import RobotTriggerService
 # ==========================================
 # 2. Inisialisasi Semua Komponen (Services)
 # ==========================================
-robot_ws_handler = RobotWebSocketHandler(pipeline_service=None)  # pipeline di-set setelah init
+robot_ws_handler = RobotWebSocketHandler(pipeline_service=None, socketio_server=socketio)  # pipeline di-set setelah init
+
 be_client = BackendSocketClient()
 robot_trigger_service = RobotTriggerService(be_socket_client=be_client)
 aggregator = AggregatorService(on_summary=be_client.emit_minute_summary)

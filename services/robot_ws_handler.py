@@ -30,13 +30,15 @@ class RobotWebSocketHandler:
     Frame baru akan di-drop jika pipeline masih memproses frame sebelumnya.
     """
 
-    def __init__(self, pipeline_service):
+    def __init__(self, pipeline_service, socketio_server=None):
         """
         Args:
             pipeline_service: Instance VisionPipelineService yang akan
                               memproses tiap frame yang diterima dari robot.
+            socketio_server: Server SocketIO (opsional) untuk mengirim command balik ke robot.
         """
         self.pipeline = pipeline_service
+        self.socketio = socketio_server
         self.lock = threading.Lock()
 
         # Multi-robot: satu slot pending per robot_id (round-robin saat diambil).
@@ -46,7 +48,26 @@ class RobotWebSocketHandler:
         self._rr_index: int = 0
         self._has_pending = threading.Event()
 
+    def send_hardware_command(self, robot_id: str, hw_payload: dict) -> None:
+        """
+        Mengirimkan perintah ekspresi (face_code) & suara (speaker_command) langsung ke robot.
+        """
+        if self.socketio:
+            try:
+                payload = {
+                    "robot_id": robot_id,
+                    "face_code": hw_payload.get("face_code", "ROBOT_FACE_1_NEUTRAL"),
+                    "speaker_command": hw_payload.get("speaker_command", "none"),
+                    "lcd_command": hw_payload.get("lcd_command", "normal"),
+                    "timestamp": hw_payload.get("timestamp")
+                }
+                self.socketio.emit('robot_action', payload)
+                logger.debug(f"[{robot_id}] Emit robot_action → face={payload['face_code']} sound={payload['speaker_command']}")
+            except Exception as e:
+                logger.error(f"[{robot_id}] Gagal emit robot_action: {e}")
+
     def on_robot_frame(self, robot_id: str, frame_bytes: bytes, distance_json: dict, frame_size_bytes: int = None) -> None:
+
         """
         Dipanggil oleh Flask-SocketIO setiap kali robot mengirim frame.
         Menerapkan frame-dropping: hanya simpan frame terbaru, buang yang lama.

@@ -90,7 +90,8 @@ class BackendSocketClient:
     # ------------------------------------------------------------------
 
     def emit_realtime(self, robot_id: str, distance: str, confidence: int,
-                      blink_event: bool, timestamp: str) -> None:
+                      blink_event: bool, timestamp: str,
+                      hardware_payload: dict = None) -> None:
         """
         CHANNEL A — Kirim data real-time tiap frame ke BE.
         Event: py-eye-detection
@@ -101,6 +102,7 @@ class BackendSocketClient:
             confidence (int): Tingkat keyakinan (0-100).
             blink_event (bool): True jika frame ini mendeteksi satu kedipan penuh.
             timestamp (str): Waktu deteksi dalam format ISO 8601.
+            hardware_payload (dict): Perintah ekspresi LCD & speaker ("face_code", "speaker_command").
         """
         if not self._connected:
             return
@@ -113,11 +115,15 @@ class BackendSocketClient:
             "timestamp": timestamp
         }
 
+        if hardware_payload:
+            payload["hardware"] = hardware_payload
+
         try:
             self._sio.emit('py-eye-detection', payload)
-            logger.debug(f"[BE Client] emit py-eye-detection → {distance} | blink={blink_event}")
+            logger.debug(f"[BE Client] emit py-eye-detection → {distance} | blink={blink_event} | hw={hardware_payload.get('face_code') if hardware_payload else 'None'}")
         except Exception as e:
             logger.error(f"[BE Client] Gagal emit py-eye-detection: {e}")
+
 
     def emit_minute_summary(self, summary: dict) -> None:
         """

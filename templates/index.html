@@ -61,9 +61,15 @@ h1.hero{margin:0;font-size:1.5rem;line-height:1.2;font-weight:800;letter-spacing
 .btn-primary:hover{filter:brightness(.93)}
 .btn-primary svg{width:16px;height:16px}
 .trig-row{display:flex;flex-wrap:wrap;gap:.4rem}
-.trig{font-size:11px;font-weight:800;padding:.4rem .8rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer}
-.trig:hover{background:var(--surface-2);color:var(--text)}
-.trig.active{background:var(--color-signal-blue);color:#fff;border-color:transparent}
+.trig{font-size:11px;font-weight:800;padding:.4rem .8rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer;user-select:none;transition:border-color .15s ease,transform .1s ease}
+.trig:hover{background:var(--surface-2);color:var(--text);border-color:color-mix(in srgb,var(--color-signal-blue) 35%,var(--border))}
+.trig:active{transform:scale(.93)}
+@keyframes trigFlash{
+  0%{background:var(--color-signal-blue);color:#fff;border-color:transparent;box-shadow:0 0 0 4px color-mix(in srgb,var(--color-signal-blue) 40%,transparent);transform:scale(1.05)}
+  30%{background:var(--color-signal-blue);color:#fff;border-color:transparent;box-shadow:0 0 0 2px color-mix(in srgb,var(--color-signal-blue) 20%,transparent);transform:scale(1)}
+  100%{background:var(--surface);color:var(--text-muted);border-color:var(--border);box-shadow:0 0 0 0 transparent;transform:scale(1)}
+}
+.trig.flashing{animation:trigFlash .7s cubic-bezier(.16,1,.3,1) forwards}
 /* robot tabs */
 .tabs{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
 .tab{display:inline-flex;align-items:center;gap:.5rem;font-size:.78rem;font-weight:700;padding:.55rem .95rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer}
@@ -308,8 +314,18 @@ let selRobot=localStorage.getItem('socasob-ml-robot')||null;
 let workSec=0,lastOk=0,hasData=false;
 const workCache={};
 function setVideoSrc(){const img=document.querySelector('.video-frame');if(!img)return;img.src=selRobot?('/video_feed?robot_id='+encodeURIComponent(selRobot)+'&_='+Date.now()):('/video_feed?_='+Date.now());}
-// manual trigger (kirim robot_id terpilih)
-document.querySelectorAll('#trig-row .trig').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('#trig-row .trig').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const body={trigger:btn.dataset.trig};if(selRobot)body.robot_id=selRobot;fetch('/api/robot/trigger-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});};});
+// manual trigger (kirim robot_id terpilih, animasi flash & fadeout berulang)
+document.querySelectorAll('#trig-row .trig').forEach(btn=>{
+  btn.onclick=()=>{
+    btn.classList.remove('flashing');
+    void btn.offsetWidth;
+    btn.classList.add('flashing');
+    const body={trigger:btn.dataset.trig};
+    if(selRobot)body.robot_id=selRobot;
+    fetch('/api/robot/trigger-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});
+  };
+  btn.addEventListener('animationend',()=>btn.classList.remove('flashing'));
+});
 function renderTabs(robots){
   const box=$('robot-tabs');$('robot-count').textContent=robots.length;
   if(!robots.length){box.innerHTML='<span class="desc">Belum ada robot — kirim frame via WS / POST /api/frame.</span>';return;}
@@ -398,7 +414,6 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('robot-id-display').textContent=robot;
   const trig=d.robot_trigger||hw.robot_trigger||'normal';
   const tb=$('robot-trigger-badge');tb.textContent=trig;tb.className='tag '+(trig==='dry'?'warn':trig==='10'?'bad':trig==='5'?'warn':'ok');
-  document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.toggle('active', b.dataset.trig === trig);});
   setConn('ok',robot);
   $('sync-tag').textContent='Aktuator Sync';$('sync-tag').className='tag ok';
   $('sys-mini').textContent='Aktif';$('sys-dot').className='dot on';$('cam-mini').textContent='Terhubung';$('cam-dot').className='dot on';

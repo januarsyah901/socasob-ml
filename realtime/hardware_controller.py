@@ -192,11 +192,12 @@ class HardwareActuatorController:
     @staticmethod
     def to_robot_trigger(lcd_cmd: str) -> str:
         """
-        Memetakan perintah LCD internal ke 4 trigger pesan teks untuk robot:
+        Memetakan perintah LCD internal ke trigger pesan teks untuk robot:
         - 'normal'       -> 'normal'
         - 'fatigue_5m'   -> '5'
         - 'fatigue_10m'  -> '10'
         - 'dry_eye'      -> 'dry'
+        - 'break_20m'    -> '20'
         - default        -> 'normal'
         """
         mapping = {
@@ -204,6 +205,7 @@ class HardwareActuatorController:
             "fatigue_5m": "5",
             "fatigue_10m": "10",
             "dry_eye": "dry",
+            "break_20m": "20",
         }
         return mapping.get(lcd_cmd, "normal")
 

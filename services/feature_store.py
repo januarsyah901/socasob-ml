@@ -99,3 +99,53 @@ class FeatureStore:
             if robot_id:
                 return robot_id in self._stores
             return self._features is not None
+
+    def update_hardware_trigger(
+        self,
+        trigger: str,
+        robot_id: Optional[str] = None,
+        lcd_cmd: Optional[str] = None,
+        speaker_cmd: Optional[str] = None,
+        lcd_label: Optional[str] = None,
+        speaker_label: Optional[str] = None,
+    ) -> None:
+        """
+        Memperbarui status hardware (robot_trigger, lcd_command, speaker_command)
+        pada snapshot fitur yang ada untuk robot_id tertentu atau seluruh robot.
+        """
+        with self.lock:
+            target_ids = []
+            if robot_id and robot_id in self._stores:
+                target_ids = [robot_id]
+            elif not robot_id:
+                target_ids = list(self._stores.keys())
+
+            for rid in target_ids:
+                feat = self._stores[rid]["features"]
+                feat["robot_trigger"] = trigger
+                hw = feat.get("hardware")
+                if isinstance(hw, dict):
+                    if lcd_cmd:
+                        hw["lcd_command"] = lcd_cmd
+                    if speaker_cmd:
+                        hw["speaker_command"] = speaker_cmd
+                    if lcd_label:
+                        hw["lcd_label"] = lcd_label
+                    if speaker_label:
+                        hw["speaker_label"] = speaker_label
+                    hw["robot_trigger"] = trigger
+
+            if self._features is not None:
+                self._features["robot_trigger"] = trigger
+                hw = self._features.get("hardware")
+                if isinstance(hw, dict):
+                    if lcd_cmd:
+                        hw["lcd_command"] = lcd_cmd
+                    if speaker_cmd:
+                        hw["speaker_command"] = speaker_cmd
+                    if lcd_label:
+                        hw["lcd_label"] = lcd_label
+                    if speaker_label:
+                        hw["speaker_label"] = speaker_label
+                    hw["robot_trigger"] = trigger
+

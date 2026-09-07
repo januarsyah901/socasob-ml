@@ -155,6 +155,7 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
         <button class="trig" data-trig="5">5</button>
         <button class="trig" data-trig="10">10</button>
         <button class="trig" data-trig="dry">dry</button>
+        <button class="trig" data-trig="20">20</button>
       </div>
     </div>
   </div>
@@ -397,6 +398,7 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('robot-id-display').textContent=robot;
   const trig=d.robot_trigger||hw.robot_trigger||'normal';
   const tb=$('robot-trigger-badge');tb.textContent=trig;tb.className='tag '+(trig==='dry'?'warn':trig==='10'?'bad':trig==='5'?'warn':'ok');
+  document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.toggle('active', b.dataset.trig === trig);});
   setConn('ok',robot);
   $('sync-tag').textContent='Aktuator Sync';$('sync-tag').className='tag ok';
   $('sys-mini').textContent='Aktif';$('sys-dot').className='dot on';$('cam-mini').textContent='Terhubung';$('cam-dot').className='dot on';

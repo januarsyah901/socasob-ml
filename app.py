@@ -385,7 +385,7 @@ def api_features():
 @app.route('/api/robot/trigger-test', methods=['GET', 'POST'])
 def api_trigger_robot_test():
     """
-    Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry") ke robot.
+    Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry", "20") ke robot.
     Menerima parameter 'trigger' dan opsional 'robot_id'.
     """
     if request.method == 'POST':
@@ -400,17 +400,59 @@ def api_trigger_robot_test():
         return jsonify({
             "success": False,
             "error": "Parameter 'trigger' wajib diisi.",
-            "supported_triggers": ["normal", "5", "10", "dry"],
-            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"dry\", \"robot_id\": \"dummyrobot01\"}'"
+            "supported_triggers": ["normal", "5", "10", "dry", "20"],
+            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"20\", \"robot_id\": \"dummyrobot01\"}'"
         }), 400
 
     trigger_clean = str(trigger).strip().lower()
-    if trigger_clean not in {"normal", "5", "10", "dry"}:
+    if trigger_clean not in {"normal", "5", "10", "dry", "20"}:
         return jsonify({
             "success": False,
             "error": f"Trigger '{trigger}' tidak valid.",
-            "supported_triggers": ["normal", "5", "10", "dry"]
+            "supported_triggers": ["normal", "5", "10", "dry", "20"]
         }), 400
+
+    trigger_previews = {
+        "normal": {
+            "lcd_command": "normal",
+            "speaker_command": "none",
+            "lcd_label": "Muka Normal (Kedip Normal)",
+            "speaker_label": "Tidak Bersuara"
+        },
+        "5": {
+            "lcd_command": "fatigue_5m",
+            "speaker_command": "none",
+            "lcd_label": "Muka Sayu (Mata Lelah 5 Menit Pertama)",
+            "speaker_label": "Tidak Bersuara"
+        },
+        "10": {
+            "lcd_command": "fatigue_10m",
+            "speaker_command": "bip-bip",
+            "lcd_label": "Muka Kesal/Tajam (Mata Lelah >= 10 Menit)",
+            "speaker_label": "Suara 'bip-bip' (Peringatan Mata Lelah 10m)"
+        },
+        "dry": {
+            "lcd_command": "dry_eye",
+            "speaker_command": "pop-pop",
+            "lcd_label": "Muka Kecewa/Sipit (Terdeteksi Mata Kering)",
+            "speaker_label": "Suara 'pop-pop' (Deteksi Mata Kering)"
+        },
+        "20": {
+            "lcd_command": "break_20m",
+            "speaker_command": "ting-tong",
+            "lcd_label": "Muka Senang (Peringatan Istirahat 20 Detik)",
+            "speaker_label": "Suara 'ting-tong' (Pengingat Istirahat)"
+        },
+    }
+    meta = trigger_previews.get(trigger_clean, {})
+    feature_store.update_hardware_trigger(
+        trigger=trigger_clean,
+        robot_id=robot_id,
+        lcd_cmd=meta.get("lcd_command"),
+        speaker_cmd=meta.get("speaker_command"),
+        lcd_label=meta.get("lcd_label"),
+        speaker_label=meta.get("speaker_label"),
+    )
 
     # Jika robot_id tidak disebutkan, kirim ke semua robot yang terhubung
     if not robot_id:

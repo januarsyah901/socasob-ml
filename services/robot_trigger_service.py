@@ -8,6 +8,7 @@ trigger ekspresi berupa teks polos:
 - "5"      : Mata mulai lelah (tahap 1, 5 menit)
 - "10"     : Mata lelah berat / kronis (>= 10 menit)
 - "dry"    : Terdeteksi mata kering
+- "20"     : Peringatan istirahat aturan 20-20-20
 """
 
 import threading
@@ -17,7 +18,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_TRIGGERS = {"normal", "5", "10", "dry"}
+VALID_TRIGGERS = {"normal", "5", "10", "dry", "20"}
 
 
 class RobotTriggerService:
@@ -159,5 +160,6 @@ class RobotTriggerService:
             "5": "fatigue_5m",
             "10": "fatigue_10m",
             "dry": "dry_eye",
+            "20": "break_20m",
         }
         return mapping.get(trigger, "normal")

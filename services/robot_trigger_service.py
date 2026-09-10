@@ -32,6 +32,8 @@ class RobotTriggerService:
         self._locks: Dict[str, threading.Lock] = {}
         self._last_triggers: Dict[str, str] = {}
         self._last_sent_times: Dict[str, float] = {}
+        self._manual_override_until: Dict[str, float] = {}
+        self._manual_override_payloads: Dict[str, dict] = {}
         self._global_lock = threading.Lock()
 
     def set_be_client(self, be_socket_client) -> None:
@@ -72,18 +74,124 @@ class RobotTriggerService:
         with self._global_lock:
             return robot_id in self._connections
 
+    def get_connected_robots(self) -> list:
+        """Daftar robot_id yang sedang terhubung via WebSocket."""
+        with self._global_lock:
+            return list(self._connections.keys())
+
+    def is_in_manual_override(self, robot_id: Optional[str] = None) -> bool:
+        """Cek apakah robot sedang dalam masa manual override (holding)."""
+        now = time.time()
+        with self._global_lock:
+            if self._manual_override_until.get("__all__", 0.0) > now:
+                return True
+            if robot_id and self._manual_override_until.get(robot_id, 0.0) > now:
+                return True
+            return False
+
+    def get_manual_override_remaining(self, robot_id: Optional[str] = None) -> float:
+        """Sisa durasi manual override dalam detik."""
+        now = time.time()
+        rem = 0.0
+        with self._global_lock:
+            all_rem = self._manual_override_until.get("__all__", 0.0) - now
+            if all_rem > rem:
+                rem = all_rem
+            if robot_id:
+                rid_rem = self._manual_override_until.get(robot_id, 0.0) - now
+                if rid_rem > rem:
+                    rem = rid_rem
+        return max(0.0, rem)
+
+    def get_override_payload(self, robot_id: Optional[str] = None) -> Optional[dict]:
+        """Ambil metadata payload override aktif (jika ada)."""
+        if not self.is_in_manual_override(robot_id):
+            return None
+        with self._global_lock:
+            if robot_id and robot_id in self._manual_override_payloads:
+                return self._manual_override_payloads[robot_id].copy()
+            if "__all__" in self._manual_override_payloads:
+                return self._manual_override_payloads["__all__"].copy()
+            return None
+
+    def set_manual_override(
+        self,
+        robot_id: str,
+        trigger: str,
+        duration_sec: float = 20.0,
+        meta: Optional[dict] = None
+    ) -> bool:
+        """
+        Kirim trigger paksa dan tahan status tersebut selama duration_sec detik.
+        Selama durasi ini, trigger otomatis dari pipeline vision akan diabaikan.
+        """
+        trigger_str = str(trigger).strip().lower()
+        if trigger_str not in VALID_TRIGGERS:
+            trigger_str = "normal"
+
+        now = time.time()
+        until = now + max(0.0, duration_sec)
+        with self._global_lock:
+            self._manual_override_until[robot_id] = until
+            payload = meta.copy() if meta else {}
+            payload["trigger"] = trigger_str
+            self._manual_override_payloads[robot_id] = payload
+
+        logger.info(f"[TriggerService] Manual override robot '{robot_id}' -> '{trigger_str}' selama {duration_sec}s.")
+        return self.send_trigger(robot_id, trigger_str, force=True)
+
+    def broadcast_manual_override(
+        self,
+        trigger: str,
+        duration_sec: float = 20.0,
+        meta: Optional[dict] = None
+    ) -> int:
+        """
+        Broadcast trigger paksa dan tahan status ke semua robot selama duration_sec detik.
+        """
+        trigger_str = str(trigger).strip().lower()
+        if trigger_str not in VALID_TRIGGERS:
+            trigger_str = "normal"
+
+        now = time.time()
+        until = now + max(0.0, duration_sec)
+        with self._global_lock:
+            self._manual_override_until["__all__"] = until
+            payload = meta.copy() if meta else {}
+            payload["trigger"] = trigger_str
+            self._manual_override_payloads["__all__"] = payload
+
+            robot_ids = list(self._connections.keys())
+            for rid in robot_ids:
+                self._manual_override_until[rid] = until
+                self._manual_override_payloads[rid] = payload.copy()
+
+        logger.info(f"[TriggerService] Manual override broadcast -> '{trigger_str}' selama {duration_sec}s.")
+        return self.broadcast_trigger(trigger_str, force=True)
+
+    def clear_manual_override(self, robot_id: Optional[str] = None) -> None:
+        """Hapus status manual override agar sistem kembali otomatis ke pipeline AI."""
+        with self._global_lock:
+            if robot_id:
+                self._manual_override_until.pop(robot_id, None)
+                self._manual_override_payloads.pop(robot_id, None)
+            else:
+                self._manual_override_until.clear()
+                self._manual_override_payloads.clear()
+        logger.info(f"[TriggerService] Manual override dibersihkan untuk '{robot_id or 'all'}'.")
+
     def get_last_trigger(self, robot_id: str) -> str:
         """Mengambil trigger terakhir yang dikirim ke robot (default: 'normal')."""
         return self._last_triggers.get(robot_id, "normal")
 
     def send_trigger(self, robot_id: str, trigger: str, force: bool = False) -> bool:
         """
-        Kirim trigger pesan teks polos ("normal", "5", "10", "dry") ke robot.
+        Kirim trigger pesan teks polos ("normal", "5", "10", "dry", "20") ke robot.
 
         Args:
             robot_id: ID unik robot target.
-            trigger: Nilai trigger ("normal", "5", "10", "dry").
-            force: Jika True, paksa kirim meski sama dengan trigger sebelumnya.
+            trigger: Nilai trigger ("normal", "5", "10", "dry", "20").
+            force: Jika True, paksa kirim meski sama dengan trigger sebelumnya atau dalam masa override.
 
         Returns:
             bool: True jika berhasil terkirim ke socket robot, False jika dilewati / gagal.
@@ -95,6 +203,10 @@ class RobotTriggerService:
             trigger_str = "normal"
 
         now = time.time()
+
+        # Abaikan trigger otomatis jika robot sedang dalam masa manual override (holding)
+        if not force and self.is_in_manual_override(robot_id):
+            return False
 
         # State-change debouncing (hanya kirim jika berbeda atau forced)
         last_trigger = self._last_triggers.get(robot_id)

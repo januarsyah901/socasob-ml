@@ -150,7 +150,10 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
       <p class="sub">Monitor real-time ML SocaSob: jarak mata, kedipan &amp; PERCLOS, status aktuator robot, dan aturan istirahat 20-20-20. Satu halaman, langsung dari <span class="mono">/api/features</span>.</p>
     </div>
     <div style="display:flex;flex-direction:column;gap:.5rem;align-items:flex-start">
-      <span class="label">Trigger robot manual</span>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <span class="label">Trigger robot manual</span>
+        <span id="hold-badge" class="tag warn" style="display:none;font-size:.72rem;padding:.12rem .4rem">Hold 20s</span>
+      </div>
       <div class="trig-row" id="trig-row">
         <button class="trig" data-trig="normal">normal</button>
         <button class="trig" data-trig="5">5</button>
@@ -309,14 +312,37 @@ let selRobot=localStorage.getItem('socasob-ml-robot')||null;
 let workSec=0,lastOk=0,hasData=false;
 const workCache={};
 function setVideoSrc(){const img=document.querySelector('.video-frame');if(!img)return;img.src=selRobot?('/video_feed?robot_id='+encodeURIComponent(selRobot)+'&_='+Date.now()):('/video_feed?_='+Date.now());}
-// manual trigger (kirim robot_id terpilih & hold opsi aktif)
+// manual trigger (kirim robot_id terpilih & hold 20 detik)
+let holdTimer = null;
+let holdRemaining = 0;
+function updateHoldBadge(sec) {
+  const hb = $('hold-badge');
+  if (!hb) return;
+  if (sec > 0) {
+    hb.style.display = 'inline-block';
+    hb.textContent = `Hold ${Math.ceil(sec)}s`;
+  } else {
+    hb.style.display = 'none';
+  }
+}
 document.querySelectorAll('#trig-row .trig').forEach(btn=>{
   btn.onclick=()=>{
     document.querySelectorAll('#trig-row .trig').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
-    const body={trigger:btn.dataset.trig};
+    const body={trigger:btn.dataset.trig, duration:20};
     if(selRobot)body.robot_id=selRobot;
     fetch('/api/robot/trigger-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});
+    holdRemaining = 20;
+    updateHoldBadge(holdRemaining);
+    if(holdTimer)clearInterval(holdTimer);
+    holdTimer = setInterval(()=>{
+      holdRemaining--;
+      updateHoldBadge(holdRemaining);
+      if(holdRemaining <= 0){
+        clearInterval(holdTimer);
+        holdTimer = null;
+      }
+    }, 1000);
   };
 });
 function renderTabs(robots){
@@ -408,6 +434,12 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   const trig=d.robot_trigger||hw.robot_trigger||'normal';
   const tb=$('robot-trigger-badge');tb.textContent=trig;tb.className='tag '+(trig==='dry'?'warn':trig==='10'?'bad':trig==='5'?'warn':'ok');
   document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.toggle('active', b.dataset.trig === trig);});
+  const remSec = d.manual_override_remaining_sec ?? 0;
+  if (d.manual_override_active && remSec > 0) {
+    updateHoldBadge(remSec);
+  } else if (!holdTimer) {
+    updateHoldBadge(0);
+  }
   setConn('ok',robot);
   $('sync-tag').textContent='Aktuator Sync';$('sync-tag').className='tag ok';
   $('sys-mini').textContent='Aktif';$('sys-dot').className='dot on';$('cam-mini').textContent='Terhubung';$('cam-dot').className='dot on';

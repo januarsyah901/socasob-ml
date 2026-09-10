@@ -215,12 +215,33 @@ class VisionPipelineService:
                 hw_payload = hw_controller.evaluate(eval_dict)
                 trigger_text = hw_payload.get("robot_trigger", "normal")
 
-                # Kirim trigger pesan teks ke robot jika trigger service aktif
+                # Cek apakah robot sedang dalam masa manual override (holding)
+                is_override = False
+                override_rem = 0.0
                 if self.trigger_service is not None and robot_id:
-                    self.trigger_service.send_trigger(robot_id, trigger_text)
+                    is_override = self.trigger_service.is_in_manual_override(robot_id)
+                    override_rem = self.trigger_service.get_manual_override_remaining(robot_id)
 
-                # Kirim perintah hardware langsung ke Robot (WebSocket)
-                self.robot_ws.send_hardware_command(robot_id, hw_payload)
+                if is_override:
+                    override_meta = self.trigger_service.get_override_payload(robot_id) or {}
+                    override_trig = override_meta.get("trigger", self.trigger_service.get_last_trigger(robot_id))
+                    trigger_text = override_trig
+                    hw_payload["robot_trigger"] = override_trig
+                    if "lcd_command" in override_meta:
+                        hw_payload["lcd_command"] = override_meta["lcd_command"]
+                    if "speaker_command" in override_meta:
+                        hw_payload["speaker_command"] = override_meta["speaker_command"]
+                    if "lcd_label" in override_meta:
+                        hw_payload["lcd_label"] = override_meta["lcd_label"]
+                    if "speaker_label" in override_meta:
+                        hw_payload["speaker_label"] = override_meta["speaker_label"]
+                else:
+                    # Kirim trigger pesan teks ke robot jika trigger service aktif
+                    if self.trigger_service is not None and robot_id:
+                        self.trigger_service.send_trigger(robot_id, trigger_text)
+
+                    # Kirim perintah hardware langsung ke Robot (WebSocket)
+                    self.robot_ws.send_hardware_command(robot_id, hw_payload)
 
                 features.update({
                     "robot_id": robot_id,
@@ -235,9 +256,10 @@ class VisionPipelineService:
                     "recommendations": metrics_dict["recommendations"],
                     "hardware": hw_payload,
                     "robot_trigger": trigger_text,
+                    "manual_override_active": is_override,
+                    "manual_override_remaining_sec": round(override_rem, 1),
                     "work_elapsed_sec": myopia_res.get("work_elapsed_sec", 0),
                     "break_remaining_sec": myopia_res.get("break_remaining_sec", 0)
-
                 })
 
                 # 5. Gambar Visualisasi Anotasi

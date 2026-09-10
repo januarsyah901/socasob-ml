@@ -53,6 +53,7 @@ except ImportError:
     sock = None
 
 from camera.esp32_camera import decode_websocket_packet
+from realtime.hardware_controller import FACE_CODE_MAP
 from services.robot_trigger_service import RobotTriggerService
 
 # ==========================================
@@ -387,30 +388,53 @@ def api_features():
 def api_trigger_robot_test():
     """
     Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry", "20") ke robot.
-    Menerima parameter 'trigger' dan opsional 'robot_id'.
+    Mendukung opsi durasi hold (default 20.0 detik) agar tidak langsung tertimpa deteksi real-time AI kamera.
+    Menerima parameter 'trigger', opsional 'robot_id', dan opsional 'duration'.
     """
+    duration = 20.0
     if request.method == 'POST':
         data = request.get_json(silent=True) or request.form.to_dict() or {}
         trigger = data.get('trigger')
         robot_id = data.get('robot_id')
+        if 'duration' in data:
+            try:
+                duration = float(data['duration'])
+            except (ValueError, TypeError):
+                duration = 20.0
     else:
         trigger = request.args.get('trigger')
         robot_id = request.args.get('robot_id')
+        if request.args.get('duration'):
+            try:
+                duration = float(request.args.get('duration'))
+            except (ValueError, TypeError):
+                duration = 20.0
 
     if not trigger:
         return jsonify({
             "success": False,
             "error": "Parameter 'trigger' wajib diisi.",
-            "supported_triggers": ["normal", "5", "10", "dry", "20"],
-            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"20\", \"robot_id\": \"dummyrobot01\"}'"
+            "supported_triggers": ["normal", "5", "10", "dry", "20", "auto"],
+            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"20\", \"robot_id\": \"dummyrobot01\", \"duration\": 20}'"
         }), 400
 
     trigger_clean = str(trigger).strip().lower()
+
+    # Opsi reset kembali ke deteksi otomatis AI sebelum 20s habis
+    if trigger_clean in {"auto", "reset"}:
+        robot_trigger_service.clear_manual_override(robot_id)
+        return jsonify({
+            "success": True,
+            "message": "Manual override dibatalkan, kendali dikembalikan penuh ke AI kamera.",
+            "trigger": "auto",
+            "robot_id": robot_id
+        }), 200
+
     if trigger_clean not in {"normal", "5", "10", "dry", "20"}:
         return jsonify({
             "success": False,
             "error": f"Trigger '{trigger}' tidak valid.",
-            "supported_triggers": ["normal", "5", "10", "dry", "20"]
+            "supported_triggers": ["normal", "5", "10", "dry", "20", "auto"]
         }), 400
 
     trigger_previews = {
@@ -445,7 +469,10 @@ def api_trigger_robot_test():
             "speaker_label": "Suara 'ting-tong' (Pengingat Istirahat)"
         },
     }
-    meta = trigger_previews.get(trigger_clean, {})
+    meta = trigger_previews.get(trigger_clean, {}).copy()
+    meta["trigger"] = trigger_clean
+    meta["face_code"] = FACE_CODE_MAP.get(meta.get("lcd_command", "normal"), "ROBOT_FACE_1_NEUTRAL")
+
     feature_store.update_hardware_trigger(
         trigger=trigger_clean,
         robot_id=robot_id,
@@ -455,22 +482,38 @@ def api_trigger_robot_test():
         speaker_label=meta.get("speaker_label"),
     )
 
-    # Jika robot_id tidak disebutkan, kirim ke semua robot yang terhubung
+    # Kirim juga via socketio robot_action jika robot menggunakan SocketIO
+    hw_cmd_payload = {
+        "robot_id": robot_id,
+        "face_code": meta.get("face_code"),
+        "speaker_command": meta.get("speaker_command", "none"),
+        "lcd_command": meta.get("lcd_command", "normal"),
+        "timestamp": time.time()
+    }
+    if robot_id:
+        robot_ws_handler.send_hardware_command(robot_id, hw_cmd_payload)
+    else:
+        for rid in robot_trigger_service.get_connected_robots():
+            robot_ws_handler.send_hardware_command(rid, hw_cmd_payload)
+
+    # Set manual override holding (default 20 detik)
     if not robot_id:
-        count = robot_trigger_service.broadcast_trigger(trigger_clean, force=True)
+        count = robot_trigger_service.broadcast_manual_override(trigger_clean, duration_sec=duration, meta=meta)
         return jsonify({
             "success": True,
-            "message": f"Trigger '{trigger_clean}' berhasil dibroadcast ke {count} robot terhubung.",
+            "message": f"Trigger '{trigger_clean}' berhasil dibroadcast dengan hold {duration}s ke {count} robot terhubung.",
             "trigger": trigger_clean,
+            "hold_duration_sec": duration,
             "broadcast_count": count
         }), 200
 
-    sent = robot_trigger_service.send_trigger(robot_id, trigger_clean, force=True)
+    sent = robot_trigger_service.set_manual_override(robot_id, trigger_clean, duration_sec=duration, meta=meta)
     return jsonify({
         "success": True,
-        "message": f"Trigger '{trigger_clean}' dikirim ke robot '{robot_id}'.",
+        "message": f"Trigger '{trigger_clean}' dikirim ke robot '{robot_id}' dengan hold {duration}s.",
         "robot_id": robot_id,
         "trigger": trigger_clean,
+        "hold_duration_sec": duration,
         "delivered_to_hardware": sent,
         "hardware_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
@@ -483,6 +526,8 @@ def api_get_robot_trigger_status():
         "success": True,
         "robot_id": robot_id,
         "current_trigger": robot_trigger_service.get_last_trigger(robot_id),
+        "manual_override_active": robot_trigger_service.is_in_manual_override(robot_id),
+        "manual_override_remaining_sec": round(robot_trigger_service.get_manual_override_remaining(robot_id), 1),
         "is_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
 

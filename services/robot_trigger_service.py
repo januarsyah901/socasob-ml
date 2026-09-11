@@ -43,20 +43,28 @@ class RobotTriggerService:
     def register_connection(self, robot_id: str, ws: Any) -> None:
         """
         Mendaftarkan koneksi WebSocket aktif untuk sebuah robot_id.
-        Mengirimkan trigger baseline awal ("normal").
+        Mengirimkan trigger baseline awal jika belum ada trigger aktif atau override.
         """
         if not robot_id or ws is None:
             return
 
         with self._global_lock:
+            if self._connections.get(robot_id) == ws:
+                return
+
             self._connections[robot_id] = ws
             if robot_id not in self._locks:
                 self._locks[robot_id] = threading.Lock()
 
         logger.info(f"[TriggerService] Robot '{robot_id}' terdaftar di WebSocket trigger manager.")
 
-        # Kirim baseline awal "normal" saat pertama terhubung
-        self.send_trigger(robot_id, "normal", force=True)
+        # Jangan paksa 'normal' jika robot sedang dalam masa manual override
+        if not self.is_in_manual_override(robot_id):
+            self.send_trigger(robot_id, "normal", force=True)
+        else:
+            override_meta = self.get_override_payload(robot_id) or {}
+            trig = override_meta.get("trigger", self.get_last_trigger(robot_id))
+            self.send_trigger(robot_id, trig, force=True)
 
     def unregister_connection(self, robot_id: str, ws: Any = None) -> None:
         """

@@ -280,10 +280,10 @@ if sock is not None:
                     logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
                     continue
 
-                current_robot_id = robot_id
-
-                # Daftarkan socket aktif ke trigger service
-                robot_trigger_service.register_connection(robot_id, ws)
+                if current_robot_id != robot_id:
+                    current_robot_id = robot_id
+                    # Daftarkan socket aktif ke trigger service hanya sekali saat robot pertama terdeteksi
+                    robot_trigger_service.register_connection(robot_id, ws)
 
                 frame_counter += 1
                 if frame_counter % 30 == 0:

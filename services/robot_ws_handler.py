@@ -30,13 +30,15 @@ class RobotWebSocketHandler:
     Frame baru akan di-drop jika pipeline masih memproses frame sebelumnya.
     """
 
-    def __init__(self, pipeline_service):
+    def __init__(self, pipeline_service=None, socketio_server=None):
         """
         Args:
             pipeline_service: Instance VisionPipelineService yang akan
                               memproses tiap frame yang diterima dari robot.
+            socketio_server: Instance Flask-SocketIO (opsional).
         """
         self.pipeline = pipeline_service
+        self.socketio_server = socketio_server
         self.lock = threading.Lock()
 
         # Menyimpan frame dan distance_json terbaru yang belum diproses

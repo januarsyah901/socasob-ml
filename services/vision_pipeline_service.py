@@ -266,6 +266,17 @@ class VisionPipelineService:
                 )
             return feat, frame_copy
 
+    def get_all_results(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Mengembalikan dict robot_id -> features untuk semua robot yang pernah diproses.
+        """
+        with self.lock:
+            res = {k: v.copy() for k, v in self.features_by_robot.items() if v}
+            if not res and self.latest_features:
+                rid = self.latest_features.get("robot_id") or "default"
+                res[rid] = self.latest_features.copy()
+            return res
+
     def stop(self) -> None:
         logger.info("Menghentikan VisionPipelineService...")
         self.is_running = False
@@ -280,14 +291,22 @@ class VisionPipelineService:
         """
         now = time.time()
         with self.lock:
-            if not self.last_robot_id:
-                return []
-            is_active = (now - self.last_frame_time) < 30.0
-            return [{
-                "robot_id": self.last_robot_id,
-                "last_seen": self.last_frame_time,
-                "is_active": is_active
-            }]
+            result = []
+            for rid, last_t in self.last_frame_time_by_robot.items():
+                is_active = (now - last_t) < 30.0
+                result.append({
+                    "robot_id": rid,
+                    "last_seen": last_t,
+                    "is_active": is_active
+                })
+            if not result and self.last_robot_id:
+                is_active = (now - self.last_frame_time) < 30.0
+                result.append({
+                    "robot_id": self.last_robot_id,
+                    "last_seen": self.last_frame_time,
+                    "is_active": is_active
+                })
+            return result
 
     def set_ear_threshold(self, threshold: float) -> int:
         """

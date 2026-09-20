@@ -145,3 +145,14 @@ class RobotWebSocketHandler:
             bool: True jika ada frame, False jika timeout.
         """
         return self._has_pending.wait(timeout=timeout)
+
+    def send_hardware_command(self, robot_id: str, payload: dict) -> None:
+        """
+        Kirim perintah hardware ke robot via SocketIO jika terhubung.
+        """
+        if self.socketio_server is not None:
+            try:
+                self.socketio_server.emit('robot_action', payload, room=robot_id)
+            except Exception as e:
+                logger.warning(f"Gagal emit robot_action ke {robot_id}: {e}")
+

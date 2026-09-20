@@ -66,6 +66,7 @@ class VisionPipelineService:
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
         self.last_frame_time = 0.0
+        self.last_robot_id: Optional[str] = None
 
     def start(self) -> None:
         if self.is_running:
@@ -83,6 +84,8 @@ class VisionPipelineService:
         """
         Loop utama: tunggu frame dari robot, proses analitik CV, push ke BE & Aggregator.
         """
+        logger.info("Vision pipeline loop berjalan...")
+
         while self.is_running:
             try:
                 has_frame = self.robot_ws.wait_for_frame(timeout=1.0)
@@ -94,7 +97,7 @@ class VisionPipelineService:
                     robot_id, frame, distance_json, frame_size_bytes = pending_res
                 else:
                     robot_id, frame, distance_json = pending_res
-                    frame_size_bytes = frame.nbytes if frame is not None else 0
+                    frame_size_bytes = 0
 
                 if frame is None or robot_id is None:
                     continue
@@ -105,6 +108,7 @@ class VisionPipelineService:
 
                 current_time = time.time()
                 self.last_frame_time = current_time
+                self.last_robot_id = robot_id
                 iso_time = get_current_iso_time()
                 fps = self.fps_counter.update()
 
@@ -252,3 +256,28 @@ class VisionPipelineService:
             self.thread.join(timeout=2.0)
         self.face_mesh.release()
         logger.info("VisionPipelineService berhasil dihentikan.")
+
+    def list_robots(self) -> list:
+        """
+        Daftar robot yang aktif di pipeline.
+        """
+        now = time.time()
+        with self.lock:
+            if not self.last_robot_id:
+                return []
+            is_active = (now - self.last_frame_time) < 30.0
+            return [{
+                "robot_id": self.last_robot_id,
+                "last_seen": self.last_frame_time,
+                "is_active": is_active
+            }]
+
+    def set_ear_threshold(self, threshold: float) -> int:
+        """
+        Memperbarui batas threshold EAR pada analyzer mata.
+        """
+        with self.lock:
+            if hasattr(self, 'eye_analyzer') and self.eye_analyzer:
+                self.eye_analyzer.ear_threshold = threshold
+                return 1
+            return 0

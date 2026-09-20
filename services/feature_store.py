@@ -97,3 +97,16 @@ class FeatureStore:
         """Mengecek apakah sudah ada data fitur yang masuk."""
         with self.lock:
             return self._features is not None
+
+    def reset(self, robot_id: Optional[str] = None) -> None:
+        """Reset data fitur dan cache robot ke kondisi awal."""
+        with self.lock:
+            if robot_id:
+                self._by_robot.pop(robot_id, None)
+                self._last_seen.pop(robot_id, None)
+                if self._features and self._features.get("robot_id") == robot_id:
+                    self._features = None
+            else:
+                self._features = None
+                self._by_robot.clear()
+                self._last_seen.clear()

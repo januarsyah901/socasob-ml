@@ -58,6 +58,12 @@ class AggregatorService:
         self._recommendations: list[str] = []
         self._last_frame_time: float = time.time()
 
+    def reset(self) -> None:
+        """Reset seluruh akumulasi data counter aggregator."""
+        with self._lock:
+            self._reset_state()
+        logger.info("[Aggregator] State counter berhasil direset.")
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -93,10 +99,11 @@ class AggregatorService:
     # Data Ingestion (dipanggil tiap frame dari VisionPipelineService)
     # ------------------------------------------------------------------
 
-    def ingest(self, robot_id: str, distance: str, blink_event: bool, features: dict = {}, 
+    def ingest(self, robot_id: str, distance: str, blink_event: bool,
                blink_rate: float, health_status: str,
                eye_conditions: list[str], recommendations: list[str],
-               perclos: float = 0.0, composite_score: float = 0.0) -> None:
+               perclos: float = 0.0, composite_score: float = 0.0,
+               features: Optional[dict] = None) -> None:
         """
         Terima data satu frame untuk diakumulasi.
         """

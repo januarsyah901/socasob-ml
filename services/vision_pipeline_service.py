@@ -317,3 +317,33 @@ class VisionPipelineService:
                 self.eye_analyzer.ear_threshold = threshold
                 return 1
             return 0
+
+    def reset(self, robot_id: Optional[str] = None) -> None:
+        """Reset analitik vision pipeline, hardware controller, dan cache fitur."""
+        with self.lock:
+            if robot_id:
+                self.frames_by_robot.pop(robot_id, None)
+                self.features_by_robot.pop(robot_id, None)
+                self.last_frame_time_by_robot.pop(robot_id, None)
+                if self.last_robot_id == robot_id:
+                    self.last_robot_id = None
+                    self.latest_features = {}
+                    self.latest_annotated_frame = None
+            else:
+                self.latest_features = {}
+                self.latest_annotated_frame = None
+                self.frames_by_robot.clear()
+                self.features_by_robot.clear()
+                self.last_frame_time_by_robot.clear()
+                self.last_robot_id = None
+
+        if hasattr(self, 'eye_analyzer') and self.eye_analyzer:
+            self.eye_analyzer.reset()
+
+        if hasattr(self, 'hw_controller') and self.hw_controller:
+            self.hw_controller.reset()
+
+        if hasattr(self, 'fps_counter') and self.fps_counter:
+            self.fps_counter.reset()
+
+        logger.info(f"[VisionPipeline] Pipeline direset ke kondisi awal untuk '{robot_id or 'all'}'.")

@@ -213,6 +213,26 @@ class RobotTriggerService:
                 self._manual_override_payloads.clear()
         logger.info(f"[TriggerService] Manual override dibersihkan untuk '{robot_id or 'all'}'.")
 
+    def reset(self, robot_id: Optional[str] = None) -> None:
+        """Reset status trigger dan kembalikan robot ke trigger 'normal'."""
+        with self._global_lock:
+            if robot_id:
+                self._last_triggers.pop(robot_id, None)
+                self._last_sent_times.pop(robot_id, None)
+                self._manual_override_until.pop(robot_id, None)
+                self._manual_override_payloads.pop(robot_id, None)
+            else:
+                self._last_triggers.clear()
+                self._last_sent_times.clear()
+                self._manual_override_until.clear()
+                self._manual_override_payloads.clear()
+
+        if robot_id:
+            self.send_trigger(robot_id, "normal", force=True)
+        else:
+            self.broadcast_trigger("normal", force=True)
+        logger.info(f"[TriggerService] Trigger service direset untuk '{robot_id or 'all'}'.")
+
     def get_last_trigger(self, robot_id: str) -> str:
         """Mengambil trigger terakhir yang dikirim ke robot (default: 'normal')."""
         return self._last_triggers.get(robot_id, "normal")

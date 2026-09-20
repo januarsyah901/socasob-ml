@@ -563,6 +563,39 @@ def api_get_robot_trigger_status():
         "is_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
 
+@app.route('/api/reset', methods=['GET', 'POST'])
+def api_reset_records():
+    """
+    Mereset semua data record dan state analitik sebelumnya,
+    sehingga kondisi kembali seperti pertama kali robot digunakan.
+    Opsional menerima parameter 'robot_id'.
+    """
+    robot_id = None
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
+        robot_id = data.get('robot_id')
+    else:
+        robot_id = request.args.get('robot_id')
+
+    # 1. Reset pipeline vision analitik CV, fps_counter, controller hardware
+    pipeline_service.reset(robot_id=robot_id)
+
+    # 2. Reset FeatureStore cache
+    feature_store.reset(robot_id=robot_id)
+
+    # 3. Reset aggregator 1 menit
+    aggregator.reset()
+
+    # 4. Reset trigger service dan kembalikan robot ke trigger 'normal'
+    robot_trigger_service.reset(robot_id=robot_id)
+
+    return jsonify({
+        "success": True,
+        "message": "Semua data record berhasil direset ke kondisi awal (seperti baru pertama kali digunakan).",
+        "robot_id": robot_id,
+        "timestamp": time.time()
+    }), 200
+
 @app.route('/api/frame', methods=['POST'])
 def api_send_frame():
     """

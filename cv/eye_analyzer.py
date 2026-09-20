@@ -59,6 +59,17 @@ class EyeConditionAnalyzer:
         # Batas screen time (Ha et al., 2025) dalam jam
         self.MAX_SCREEN_TIME_HOURS = 4
 
+    def reset(self) -> None:
+        """Reset detector, sliding window, classifier, dan akumulasi kedipan."""
+        self.detector = BlinkEventDetector(ear_threshold=self.threshold)
+        self.window = MetricsWindow(window_seconds=self.window.window_seconds)
+        self.classifier = FatigueClassifier(
+            required_consecutive=self.classifier.required_consecutive,
+            min_data_quality=self.classifier.min_data_quality
+        )
+        self.lifetime_blinks = 0
+        logger.info("[EyeAnalyzer] Seluruh metrik kedipan dan classifier direset ke 0.")
+
     def process_frame(self,
                       ear_value: float,
                       face_confidence: float,

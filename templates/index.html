@@ -47,6 +47,10 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:'Figtree',ui-sa
 .icon-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-muted);border-radius:.75rem;padding:.5rem;cursor:pointer;display:inline-flex}
 .icon-btn:hover{color:var(--text);background:var(--surface-2)}
 .icon-btn svg{width:18px;height:18px}
+.btn-reset{display:inline-flex;align-items:center;gap:.35rem;font-size:11px;font-weight:700;padding:.45rem .75rem;border-radius:.75rem;background:var(--surface);color:var(--color-error);border:1px solid color-mix(in srgb,var(--color-error) 30%,var(--border));cursor:pointer;transition:all .15s ease;user-select:none}
+.btn-reset:hover{background:color-mix(in srgb,var(--color-error) 10%,transparent);border-color:var(--color-error);transform:scale(1.02)}
+.btn-reset:active{transform:scale(.96)}
+.btn-reset svg{width:14px;height:14px}
 /* layout */
 .wrap{max-width:72rem;margin:0 auto;padding:1.5rem 1rem 3rem}
 .stack{display:flex;flex-direction:column;gap:1.5rem}
@@ -160,6 +164,7 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
     <a class="brand" href="/">socasob</a>
     <div class="topbar-actions">
       <span class="pill"><span id="be-dot" class="dot"></span>&nbsp;<span id="be-text">ML Monitor</span></span>
+      <button id="reset-btn" class="btn-reset" type="button" title="Reset semua data record (seperti baru pertama kali digunakan)"><i data-lucide="rotate-ccw"></i><span>Reset Data</span></button>
       <button id="theme-btn" class="icon-btn" aria-label="Ganti tema"><i data-lucide="sun"></i></button>
     </div>
   </div>
@@ -437,6 +442,93 @@ document.querySelectorAll('#trig-row .trig').forEach(btn=>{
     }, 1000);
   };
 });
+
+const resetBtn = $('reset-btn');
+if (resetBtn) {
+  resetBtn.onclick = () => {
+    if (!confirm('Apakah Anda yakin ingin mereset seluruh data record? Semua data akumulasi akan dikembalikan ke kondisi awal (seperti robot baru dinyalakan).')) {
+      return;
+    }
+    const body = {};
+    if (selRobot) body.robot_id = selRobot;
+    fetch('/api/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(r => r.json())
+    .then(res => {
+      workSec = 0;
+      lastOk = 0;
+      hasData = false;
+      if (selRobot) delete workCache[selRobot];
+      $('t-h').textContent = '00';
+      $('t-m').textContent = '00';
+      $('t-s').textContent = '00';
+      $('t-total').textContent = '0';
+      $('work-elapsed-time').textContent = '0s';
+      $('fatigue-duration').textContent = '0s';
+      $('break-countdown').textContent = '0s (Siap)';
+      $('break-pill').style.display = 'none';
+
+      $('perclos-value').textContent = '0.0';
+      $('blink-rate').textContent = '0.0';
+      $('ear-value').textContent = '0.000';
+      $('ear-bar').style.width = '0%';
+      $('conf-val').textContent = '0%';
+      $('conf-bar').style.width = '0%';
+      $('eye-status').textContent = 'N/A';
+      $('fat-value').textContent = 'Normal / Sehat';
+      $('fat-value').style.color = 'var(--color-success)';
+      $('dist-value').textContent = 'Jarak Aman';
+      $('dist-value').style.color = 'var(--color-success)';
+      $('dist-desc').textContent = 'Jarak aman ≥ 30 cm. Pertahankan!';
+      setTag($('dist-tag'), 'Aman', 'ok');
+      setTag($('eye-badge'), 'Normal / Sehat', 'ok');
+      setTag($('health-badge'), 'Normal / Sehat', 'ok');
+      $('system-status').textContent = 'Aman';
+      $('recommendation-text').textContent = 'Pertahankan pola kedipan normal.';
+
+      $('lcd-face-icon').textContent = '👀';
+      $('lcd-label').textContent = 'Ekspresi Normal';
+      $('lcd-desc').textContent = 'Pandangan segar & berkedip sehat.';
+      $('lcd-cmd').textContent = 'normal';
+      $('lcd-cmd').className = 'tag mut';
+      $('speaker-badge').textContent = 'Senyap (Silent)';
+      $('spk-desc').textContent = 'Tidak memutar audio.';
+      $('spk-dot').className = 'dot';
+      $('robot-trigger-badge').textContent = 'normal';
+      $('robot-trigger-badge').className = 'tag ok';
+
+      if (holdTimer) {
+        clearInterval(holdTimer);
+        holdTimer = null;
+      }
+      holdRemaining = 0;
+      updateHoldBadge(0);
+      document.querySelectorAll('#trig-row .trig').forEach(b => {
+        b.classList.toggle('active', b.dataset.trig === 'normal');
+      });
+
+      $('json-output').textContent = 'Data record berhasil direset. Menunggu frame baru...';
+
+      const origHtml = resetBtn.innerHTML;
+      resetBtn.innerHTML = '<i data-lucide="check"></i> <span>Direset!</span>';
+      resetBtn.style.color = 'var(--color-success)';
+      resetBtn.style.borderColor = 'var(--color-success)';
+      if (window.lucide) lucide.createIcons();
+      setTimeout(() => {
+        resetBtn.innerHTML = origHtml;
+        resetBtn.style.color = '';
+        resetBtn.style.borderColor = '';
+        if (window.lucide) lucide.createIcons();
+      }, 2000);
+    })
+    .catch(err => {
+      alert('Gagal mereset data: ' + err);
+    });
+  };
+}
 function renderTabs(robots){
   const box=$('robot-tabs');$('robot-count').textContent=robots.length;
   if(!robots.length){box.innerHTML='<span class="desc">Belum ada robot — kirim frame via WS / POST /api/frame.</span>';return;}

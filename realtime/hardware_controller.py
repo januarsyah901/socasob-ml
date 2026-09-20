@@ -45,6 +45,16 @@ class HardwareActuatorController:
         self._last_speaker_command: Optional[str] = None
         self._last_speaker_time: float = 0.0
 
+    def reset(self) -> None:
+        """Reset state controller ke kondisi awal (seperti robot baru dinyalakan)."""
+        self._fatigue_start_time = None
+        self._is_fatigued = False
+        self._was_on_break = False
+        self._startup_sound_emitted = False
+        self._last_speaker_command = None
+        self._last_speaker_time = 0.0
+        logger.info("[Hardware] Controller berhasil direset ke kondisi awal (startup ready).")
+
     def evaluate(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
         Evaluasi hasil deteksi dari InferenceEngine dan hasilkan perintah hardware.

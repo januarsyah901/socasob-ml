@@ -48,3 +48,7 @@ class FPSCounter:
         fps = (len(self.frame_times) - 1) / elapsed_time
         
         return round(fps, 1)
+
+    def reset(self) -> None:
+        """Kosongkan deque frame times."""
+        self.frame_times.clear()

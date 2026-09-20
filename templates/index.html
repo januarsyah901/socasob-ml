@@ -106,6 +106,84 @@
             max-height: 220px;
             overflow-y: auto;
         }
+        /* ===== Container Logs Panel ===== */
+        .logs-panel {
+            background-color: #242438;
+            padding: 20px;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 1280px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+            margin-top: 25px;
+            box-sizing: border-box;
+        }
+        .logs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .logs-header h2 {
+            margin: 0;
+            font-size: 1.1em;
+            color: #4da6ff;
+        }
+        .log-status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #2ecc71;
+            margin-right: 6px;
+            animation: pulse 1.5s infinite;
+        }
+        .log-status-dot.disconnected {
+            background: #e74c3c;
+            animation: none;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .log-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .log-controls select, .log-controls button {
+            background: #2e2e46;
+            color: #fff;
+            border: 1px solid #4da6ff;
+            border-radius: 6px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 0.82em;
+        }
+        .log-controls button:hover {
+            background: #3d3d5c;
+        }
+        .log-terminal {
+            background: #0d0d1a;
+            border-radius: 8px;
+            padding: 12px 14px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.78em;
+            height: 320px;
+            overflow-y: auto;
+            border: 1px solid #2a2a40;
+            line-height: 1.6;
+        }
+        .log-line {
+            white-space: pre-wrap;
+            word-break: break-all;
+            padding: 1px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .log-line.level-INFO    { color: #a6e22e; }
+        .log-line.level-WARNING { color: #f39c12; }
+        .log-line.level-ERROR   { color: #e74c3c; }
+        .log-line.level-DEBUG   { color: #66d9e8; }
+        .log-line.level-SYS     { color: #74b9ff; font-style: italic; }
     </style>
 </head>
 <body>
@@ -407,6 +485,146 @@ Menunggu data dari API...
         }
 
         setInterval(fetchMetrics, 500);
+    </script>
+
+    <!-- ===== Container Logs Panel ===== -->
+    <div class="logs-panel">
+        <div class="logs-header">
+            <h2>
+                <span class="log-status-dot disconnected" id="log-status-dot"></span>
+                🖥️ Container Logs — <code>socasob-ml</code>
+            </h2>
+            <div class="log-controls">
+                <label for="log-filter" style="font-size:0.82em; color:#a0a0b0;">Filter:</label>
+                <select id="log-filter" onchange="applyLogFilter()">
+                    <option value="ALL">Semua</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                    <option value="DEBUG">DEBUG</option>
+                </select>
+                <button onclick="clearLogs()">🗑️ Clear</button>
+                <button onclick="toggleAutoScroll()" id="autoscroll-btn">⬇️ Auto-scroll: ON</button>
+                <button onclick="reconnectLogs()">🔄 Reconnect</button>
+            </div>
+        </div>
+        <div class="log-terminal" id="log-terminal">
+            <div class="log-line level-SYS">Menghubungkan ke log stream...</div>
+        </div>
+    </div>
+
+    <script>
+        // ===== Container Logs via SSE =====
+        let logEventSource = null;
+        let autoScroll = true;
+        let currentFilter = 'ALL';
+        const MAX_LOG_LINES = 500;
+
+        const terminal = document.getElementById('log-terminal');
+        const statusDot = document.getElementById('log-status-dot');
+
+        function getLogLevel(line) {
+            if (line.includes('| ERROR') || line.includes('[ERROR]') || line.toLowerCase().includes('error'))
+                return 'ERROR';
+            if (line.includes('| WARNING') || line.includes('[WARNING]') || line.toLowerCase().includes('warning'))
+                return 'WARNING';
+            if (line.includes('| DEBUG') || line.includes('[DEBUG]') || line.toLowerCase().includes('debug'))
+                return 'DEBUG';
+            if (line.includes('| INFO') || line.includes('[INFO]') || line.toLowerCase().includes('info'))
+                return 'INFO';
+            if (line.startsWith('[INFO]') || line.startsWith('[ERROR]'))
+                return 'SYS';
+            return 'INFO';
+        }
+
+        function appendLog(text) {
+            const level = getLogLevel(text);
+
+            // Trim line jika melebihi MAX_LOG_LINES
+            while (terminal.children.length >= MAX_LOG_LINES) {
+                terminal.removeChild(terminal.firstChild);
+            }
+
+            const div = document.createElement('div');
+            div.className = `log-line level-${level}`;
+            div.dataset.level = level;
+            div.textContent = text;
+
+            // Terapkan filter aktif
+            if (currentFilter !== 'ALL' && level !== currentFilter && level !== 'SYS') {
+                div.style.display = 'none';
+            }
+
+            terminal.appendChild(div);
+
+            if (autoScroll) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        function applyLogFilter() {
+            currentFilter = document.getElementById('log-filter').value;
+            Array.from(terminal.querySelectorAll('.log-line')).forEach(el => {
+                const lvl = el.dataset.level;
+                if (currentFilter === 'ALL' || lvl === currentFilter || lvl === 'SYS') {
+                    el.style.display = '';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+        }
+
+        function clearLogs() {
+            terminal.innerHTML = '';
+        }
+
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            document.getElementById('autoscroll-btn').textContent =
+                `⬇️ Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+        }
+
+        function setLogConnected(connected) {
+            statusDot.classList.toggle('disconnected', !connected);
+        }
+
+        function connectLogs() {
+            if (logEventSource) {
+                logEventSource.close();
+            }
+
+            setLogConnected(false);
+            appendLog('[SYS] Menghubungkan ke /api/logs ...');
+
+            logEventSource = new EventSource('/api/logs');
+
+            logEventSource.onopen = () => {
+                setLogConnected(true);
+                appendLog('[SYS] ✅ Terhubung ke log stream.');
+            };
+
+            logEventSource.onmessage = (event) => {
+                if (event.data) {
+                    appendLog(event.data);
+                }
+            };
+
+            logEventSource.onerror = () => {
+                setLogConnected(false);
+                appendLog('[SYS] ⚠️ Koneksi log stream terputus. Mencoba reconnect otomatis...');
+                logEventSource.close();
+                // Reconnect setelah 5 detik
+                setTimeout(connectLogs, 5000);
+            };
+        }
+
+        function reconnectLogs() {
+            clearLogs();
+            connectLogs();
+        }
+
+        // Mulai log stream saat halaman dibuka
+        connectLogs();
     </script>
 </body>
 </html>

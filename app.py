@@ -31,7 +31,7 @@ from services.feature_store import FeatureStore
 from services.stream_service import StreamService
 from services.robot_validator import is_robot_registered
 from config import settings
-from utils.logger import get_logger
+from utils.logger import get_logger, log_broadcaster
 
 logger = get_logger(__name__)
 
@@ -636,6 +636,42 @@ def api_pipeline_status():
             "has_active_frame": data is not None
         }
     }), 200
+
+@app.route('/api/logs')
+def api_logs():
+    """
+    Server-Sent Events endpoint untuk streaming log aplikasi ML socasob-ml secara realtime.
+    Log dikumpulkan langsung dari Python logging handlers (in-process), bukan dari Docker CLI.
+    Browser cukup membuka EventSource('/api/logs') untuk menerima log line by line.
+    """
+    def generate_log_stream():
+        yield "data: [SYS] ✅ Terhubung ke log stream socasob-ml (in-process)\n\n"
+
+        sub_queue = log_broadcaster.subscribe()
+        try:
+            while True:
+                try:
+                    # Tunggu log baru maks 15 detik, lalu kirim heartbeat agar koneksi tidak timeout
+                    line = sub_queue.get(timeout=15)
+                    safe_line = line.replace('\r', '').rstrip('\n')
+                    yield f"data: {safe_line}\n\n"
+                except Exception:
+                    # Timeout — kirim heartbeat comment (SSE comment, tidak ditampilkan di browser)
+                    yield ": heartbeat\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            log_broadcaster.unsubscribe(sub_queue)
+
+    return Response(
+        generate_log_stream(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',  # Nonaktifkan buffering Nginx
+            'Connection': 'keep-alive',
+        }
+    )
 
 # ==========================================
 # 6. Entry Point — Menjalankan Server (Direct Run)

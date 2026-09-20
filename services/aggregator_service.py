@@ -28,13 +28,15 @@ class AggregatorService:
     lalu memanggil callback dengan payload ringkasan untuk dikirim ke BE.
     """
 
-    def __init__(self, on_summary: Callable[[dict], None]):
+    def __init__(self, on_summary: Callable[[dict], None], trigger_service=None):
         """
         Args:
             on_summary: Callback yang dipanggil setiap 1 menit dengan payload summary.
                         Biasanya ini memanggil be_socket_client.emit_minute_summary().
+            trigger_service: Instance RobotTriggerService (opsional).
         """
         self._on_summary = on_summary
+        self._trigger_service = trigger_service
         self._lock = threading.Lock()
         self._reset_state()
 

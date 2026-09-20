@@ -114,21 +114,22 @@ class ActiveMyopiaGuard:
 
                 # Cek apakah 20 menit tercapai
                 if work_elapsed >= self.WORK_DURATION_SEC:
-                    self._break_state = BreakState.BREAK_NEEDED
+                    # Langsung otomatis masuk ke fase istirahat 20 detik
+                    self._break_state = BreakState.ON_BREAK
+                    self._break_start_time = now
                     self._break_reminder_count += 1
 
             elif self._break_state == BreakState.BREAK_NEEDED:
-                # Tunggu pengguna mulai istirahat (= wajah menghilang)
-                # Sementara wajah masih ada, peringatan tetap aktif
-                work_elapsed = now - (self._work_start_time or now)
+                # Transisi otomatis (legacy state jika masih nyangkut)
+                self._break_state = BreakState.ON_BREAK
+                self._break_start_time = now
 
             elif self._break_state == BreakState.ON_BREAK:
-                # Pengguna kembali sebelum 20 detik selesai?
-                # Hitung sisa waktu break
+                # Timer 20 detik berjalan terlepas dari wajah ada atau tidak
                 if self._break_start_time:
                     elapsed_break = now - self._break_start_time
                     if elapsed_break >= self.BREAK_DURATION_SEC:
-                        # Break selesai → reset
+                        # Break 20 detik selesai → reset siklus 20 menit
                         self._reset_work_timer(now)
                     else:
                         break_remaining = self.BREAK_DURATION_SEC - elapsed_break
@@ -136,7 +137,6 @@ class ActiveMyopiaGuard:
         else:
             # Wajah tidak terdeteksi
             if self._break_state == BreakState.BREAK_NEEDED:
-                # Pengguna mulai istirahat (menjauh dari layar)
                 self._break_state = BreakState.ON_BREAK
                 self._break_start_time = now
 
@@ -149,7 +149,7 @@ class ActiveMyopiaGuard:
                     else:
                         break_remaining = self.BREAK_DURATION_SEC - elapsed_break
 
-            # Jika ACTIVE dan wajah hilang, pause timer (tidak reset)
+            # Jika ACTIVE dan wajah hilang, timer kerja tidak di-reset agar bisa diteruskan saat wajah kembali
 
         return {
             "distance_cm": distance_cm,

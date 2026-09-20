@@ -149,26 +149,19 @@ class HardwareActuatorController:
                 speaker_cmd = "none"
                 speaker_lbl = "Tidak Bersuara"
 
-        # (D) PRIORITAS 4: Mata Lelah >= 10 Menit (600 Detik)
-        elif self._is_fatigued and fatigue_duration_sec >= 600.0:
+        # (D) PRIORITAS 4: Terdeteksi Mata Lelah
+        elif self._is_fatigued:
             lcd_cmd = "fatigue_10m"
-            lcd_lbl = "Muka Kesal/Tajam (Mata Lelah >= 10 Menit)"
+            lcd_lbl = "Muka Kesal/Tajam (Terdeteksi Mata Lelah)"
 
             if self._last_speaker_command != "bip-bip" or (now - self._last_speaker_time) > 15.0:
                 speaker_cmd = "bip-bip"
-                speaker_lbl = "Suara 'bip-bip' (Peringatan Mata Lelah 10m)"
+                speaker_lbl = "Suara 'bip-bip' (Peringatan Mata Lelah)"
             else:
                 speaker_cmd = "none"
                 speaker_lbl = "Tidak Bersuara"
 
-        # (E) PRIORITAS 5: Mata Lelah 5 Menit Pertama (< 600 Detik)
-        elif self._is_fatigued and fatigue_duration_sec > 0:
-            lcd_cmd = "fatigue_5m"
-            lcd_lbl = "Muka Sayu (Mata Lelah 5 Menit Pertama)"
-            speaker_cmd = "none"
-            speaker_lbl = "Tidak Bersuara"
-
-        # (F) DEFAULT: Kondisi Normal
+        # (E) DEFAULT: Kondisi Normal
         else:
             lcd_cmd = "normal"
             speaker_cmd = "none"

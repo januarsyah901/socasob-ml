@@ -14,6 +14,10 @@ try:
 except ImportError:
     ASYNC_MODE = 'threading'
 
+import queue
+if not hasattr(queue.Queue, '__class_getitem__'):
+    queue.Queue.__class_getitem__ = classmethod(lambda cls, *args: cls)
+
 from flask import Flask, render_template, Response, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO

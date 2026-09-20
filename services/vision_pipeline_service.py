@@ -3,6 +3,7 @@
 import threading
 import time
 import numpy as np
+import cv2
 from typing import Optional, Dict, Any, Tuple
 
 from cv.face_mesh import FaceMeshDetector

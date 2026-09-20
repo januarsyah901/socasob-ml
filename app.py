@@ -430,6 +430,13 @@ def api_trigger_robot_test():
             "robot_id": robot_id
         }), 200
 
+    if not robot_trigger_service.is_manual_trigger_enabled():
+        return jsonify({
+            "success": False,
+            "error": "Fitur tombol trigger manual sedang dinonaktifkan (OFF).",
+            "manual_trigger_enabled": False
+        }), 403
+
     if trigger_clean not in {"normal", "5", "10", "dry", "20"}:
         return jsonify({
             "success": False,
@@ -518,6 +525,30 @@ def api_trigger_robot_test():
         "hardware_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
 
+@app.route('/api/robot/trigger-toggle', methods=['GET', 'POST'])
+def api_toggle_robot_trigger():
+    """
+    Endpoint untuk menyalakan/mematikan fitur tombol trigger manual.
+    GET: Mengembalikan status saat ini.
+    POST: Menerima {"enabled": bool} atau query param ?enabled=true/false.
+    """
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
+        enabled_val = data.get('enabled')
+        if enabled_val is None:
+            enabled_val = request.args.get('enabled')
+        if enabled_val is not None:
+            if isinstance(enabled_val, str):
+                is_on = enabled_val.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                is_on = bool(enabled_val)
+            robot_trigger_service.set_manual_trigger_enabled(is_on)
+
+    return jsonify({
+        "success": True,
+        "manual_trigger_enabled": robot_trigger_service.is_manual_trigger_enabled()
+    }), 200
+
 @app.route('/api/robot/trigger-status', methods=['GET'])
 def api_get_robot_trigger_status():
     """Mengecek trigger terakhir dan status koneksi robot."""
@@ -525,6 +556,7 @@ def api_get_robot_trigger_status():
     return jsonify({
         "success": True,
         "robot_id": robot_id,
+        "manual_trigger_enabled": robot_trigger_service.is_manual_trigger_enabled(),
         "current_trigger": robot_trigger_service.get_last_trigger(robot_id),
         "manual_override_active": robot_trigger_service.is_in_manual_override(robot_id),
         "manual_override_remaining_sec": round(robot_trigger_service.get_manual_override_remaining(robot_id), 1),

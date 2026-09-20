@@ -60,11 +60,19 @@ h1.hero{margin:0;font-size:1.5rem;line-height:1.2;font-weight:800;letter-spacing
 .btn-primary{display:inline-flex;align-items:center;gap:.5rem;font-size:.75rem;font-weight:700;padding:.65rem 1rem;border-radius:1rem;background:var(--color-signal-blue);color:#fff;border:none;cursor:pointer;text-decoration:none;box-shadow:var(--shadow-dreamy)}
 .btn-primary:hover{filter:brightness(.93)}
 .btn-primary svg{width:16px;height:16px}
-.trig-row{display:flex;flex-wrap:wrap;gap:.4rem}
+.trig-row{display:flex;flex-wrap:wrap;gap:.4rem;transition:opacity .2s ease}
 .trig{font-size:11px;font-weight:800;padding:.4rem .8rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer;user-select:none;transition:all .15s ease}
 .trig:hover{background:var(--surface-2);color:var(--text);border-color:color-mix(in srgb,var(--color-signal-blue) 35%,var(--border))}
 .trig:active{transform:scale(.94)}
 .trig.active{background:var(--color-signal-blue);color:#fff;border-color:transparent;box-shadow:0 2px 8px color-mix(in srgb,var(--color-signal-blue) 30%,transparent)}
+.trig-toggle{display:inline-flex;align-items:center;gap:.35rem;padding:.2rem .6rem;border-radius:9999px;font-size:10px;font-weight:800;letter-spacing:.05em;cursor:pointer;border:1px solid var(--border);background:var(--surface);transition:all .15s ease;user-select:none}
+.trig-toggle .toggle-knob{width:.45rem;height:.45rem;border-radius:9999px;background:currentColor;display:inline-block}
+.trig-toggle.on{background:color-mix(in srgb,var(--color-success) 14%,transparent);border-color:color-mix(in srgb,var(--color-success) 40%,transparent);color:var(--color-success)}
+.trig-toggle.off{background:color-mix(in srgb,var(--color-error) 12%,transparent);border-color:color-mix(in srgb,var(--color-error) 35%,transparent);color:var(--color-error)}
+.trig-toggle:hover{filter:brightness(.95);transform:scale(1.02)}
+.trig-toggle:active{transform:scale(.95)}
+.trig-row.disabled{opacity:.4;pointer-events:none;filter:grayscale(.7)}
+.trig:disabled{cursor:not-allowed;pointer-events:none}
 /* robot tabs */
 .tabs{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
 .tab{display:inline-flex;align-items:center;gap:.5rem;font-size:.78rem;font-weight:700;padding:.55rem .95rem;border-radius:9999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer}
@@ -170,6 +178,10 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
     <div style="display:flex;flex-direction:column;gap:.5rem;align-items:flex-start">
       <div style="display:flex;align-items:center;gap:.5rem">
         <span class="label">Trigger robot manual</span>
+        <button id="trig-toggle-btn" class="trig-toggle on" type="button" aria-pressed="true" title="Klik untuk mengaktifkan / menonaktifkan fitur tombol trigger">
+          <span class="toggle-knob"></span>
+          <span id="trig-toggle-label">ON</span>
+        </button>
         <span id="hold-badge" class="tag warn" style="display:none;font-size:.72rem;padding:.12rem .4rem">Hold 20s</span>
       </div>
       <div class="trig-row" id="trig-row">
@@ -343,8 +355,70 @@ function updateHoldBadge(sec) {
     hb.style.display = 'none';
   }
 }
+
+let trigFeatureEnabled = localStorage.getItem('socasob-trig-enabled') !== 'false';
+function updateTrigToggleUI(syncBackend = false) {
+  const btn = $('trig-toggle-btn');
+  const lbl = $('trig-toggle-label');
+  const row = $('trig-row');
+  const buttons = document.querySelectorAll('#trig-row .trig');
+  if (trigFeatureEnabled) {
+    if (btn) { btn.className = 'trig-toggle on'; btn.setAttribute('aria-pressed', 'true'); }
+    if (lbl) lbl.textContent = 'ON';
+    if (row) row.classList.remove('disabled');
+    buttons.forEach(b => { b.disabled = false; });
+  } else {
+    if (btn) { btn.className = 'trig-toggle off'; btn.setAttribute('aria-pressed', 'false'); }
+    if (lbl) lbl.textContent = 'OFF';
+    if (row) row.classList.add('disabled');
+    buttons.forEach(b => {
+      b.disabled = true;
+      b.classList.remove('active');
+    });
+    if (holdTimer) {
+      clearInterval(holdTimer);
+      holdTimer = null;
+    }
+    holdRemaining = 0;
+    updateHoldBadge(0);
+    const body = { trigger: 'auto' };
+    if (selRobot) body.robot_id = selRobot;
+    fetch('/api/robot/trigger-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).catch(() => {});
+  }
+  if (syncBackend) {
+    fetch('/api/robot/trigger-toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: trigFeatureEnabled })
+    }).catch(() => {});
+  }
+}
+
+const toggleBtn = $('trig-toggle-btn');
+if (toggleBtn) {
+  toggleBtn.onclick = () => {
+    trigFeatureEnabled = !trigFeatureEnabled;
+    localStorage.setItem('socasob-trig-enabled', trigFeatureEnabled ? 'true' : 'false');
+    updateTrigToggleUI(true);
+  };
+}
+
+fetch('/api/robot/trigger-toggle').then(r => r.json()).then(res => {
+  if (res.success && typeof res.manual_trigger_enabled === 'boolean') {
+    trigFeatureEnabled = res.manual_trigger_enabled;
+    localStorage.setItem('socasob-trig-enabled', trigFeatureEnabled ? 'true' : 'false');
+    updateTrigToggleUI(false);
+  }
+}).catch(() => {});
+updateTrigToggleUI(false);
+
 document.querySelectorAll('#trig-row .trig').forEach(btn=>{
   btn.onclick=()=>{
+    if (!trigFeatureEnabled) return;
     document.querySelectorAll('#trig-row .trig').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     const body={trigger:btn.dataset.trig, duration:20};
@@ -451,11 +525,16 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('robot-id-display').textContent=robot;
   const trig=d.robot_trigger||hw.robot_trigger||'normal';
   const tb=$('robot-trigger-badge');tb.textContent=trig;tb.className='tag '+(trig==='dry'?'warn':trig==='10'?'bad':trig==='5'?'warn':'ok');
-  document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.toggle('active', b.dataset.trig === trig);});
-  const remSec = d.manual_override_remaining_sec ?? 0;
-  if (d.manual_override_active && remSec > 0) {
-    updateHoldBadge(remSec);
-  } else if (!holdTimer) {
+  if (trigFeatureEnabled) {
+    document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.toggle('active', b.dataset.trig === trig);});
+    const remSec = d.manual_override_remaining_sec ?? 0;
+    if (d.manual_override_active && remSec > 0) {
+      updateHoldBadge(remSec);
+    } else if (!holdTimer) {
+      updateHoldBadge(0);
+    }
+  } else {
+    document.querySelectorAll('#trig-row .trig').forEach(b=>{b.classList.remove('active');});
     updateHoldBadge(0);
   }
   setConn('ok',robot);

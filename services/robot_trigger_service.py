@@ -36,6 +36,7 @@ class RobotTriggerService:
         self._manual_override_until: Dict[str, float] = {}
         self._manual_override_payloads: Dict[str, dict] = {}
         self._global_lock = threading.Lock()
+        self._manual_trigger_enabled: bool = True
 
     def set_be_client(self, be_socket_client) -> None:
         """Set atau update instance be_socket_client."""
@@ -123,6 +124,22 @@ class RobotTriggerService:
                 return self._manual_override_payloads["__all__"].copy()
             return None
 
+    def is_manual_trigger_enabled(self) -> bool:
+        """Cek apakah fitur manual trigger aktif."""
+        with self._global_lock:
+            return self._manual_trigger_enabled
+
+    def set_manual_trigger_enabled(self, enabled: bool) -> bool:
+        """Aktifkan atau nonaktifkan fitur manual trigger robot."""
+        with self._global_lock:
+            self._manual_trigger_enabled = bool(enabled)
+            if not self._manual_trigger_enabled:
+                self._manual_override_until.clear()
+                self._manual_override_payloads.clear()
+        status_str = "ON" if self._manual_trigger_enabled else "OFF"
+        logger.info(f"[TriggerService] Fitur manual trigger diset ke -> {status_str}.")
+        return self._manual_trigger_enabled
+
     def set_manual_override(
         self,
         robot_id: str,
@@ -134,6 +151,10 @@ class RobotTriggerService:
         Kirim trigger paksa dan tahan status tersebut selama duration_sec detik.
         Selama durasi ini, trigger otomatis dari pipeline vision akan diabaikan.
         """
+        if not self.is_manual_trigger_enabled():
+            logger.warning("[TriggerService] Manual override ditolak karena fitur tombol trigger sedang OFF.")
+            return False
+
         trigger_str = str(trigger).strip().lower()
         if trigger_str not in VALID_TRIGGERS:
             trigger_str = "normal"
@@ -158,6 +179,9 @@ class RobotTriggerService:
         """
         Broadcast trigger paksa dan tahan status ke semua robot selama duration_sec detik.
         """
+        if not self.is_manual_trigger_enabled():
+            logger.warning("[TriggerService] Broadcast manual override ditolak karena fitur tombol trigger sedang OFF.")
+            return 0
         trigger_str = str(trigger).strip().lower()
         if trigger_str not in VALID_TRIGGERS:
             trigger_str = "normal"

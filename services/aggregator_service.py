@@ -93,7 +93,7 @@ class AggregatorService:
     # Data Ingestion (dipanggil tiap frame dari VisionPipelineService)
     # ------------------------------------------------------------------
 
-    def ingest(self, robot_id: str, distance: str, blink_event: bool,
+    def ingest(self, robot_id: str, distance: str, blink_event: bool, features: dict = {}, 
                blink_rate: float, health_status: str,
                eye_conditions: list[str], recommendations: list[str],
                perclos: float = 0.0, composite_score: float = 0.0) -> None:

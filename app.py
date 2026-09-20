@@ -53,15 +53,17 @@ except ImportError:
     sock = None
 
 from camera.esp32_camera import decode_websocket_packet
+from realtime.hardware_controller import FACE_CODE_MAP
 from services.robot_trigger_service import RobotTriggerService
 
 # ==========================================
 # 2. Inisialisasi Semua Komponen (Services)
 # ==========================================
-robot_ws_handler = RobotWebSocketHandler(pipeline_service=None)  # pipeline di-set setelah init
+robot_ws_handler = RobotWebSocketHandler(pipeline_service=None, socketio_server=socketio)  # pipeline di-set setelah init
+
 be_client = BackendSocketClient()
 robot_trigger_service = RobotTriggerService(be_socket_client=be_client)
-aggregator = AggregatorService(on_summary=be_client.emit_minute_summary)
+aggregator = AggregatorService(on_summary=be_client.emit_minute_summary, trigger_service=robot_trigger_service)
 pipeline_service = VisionPipelineService(
     robot_ws_handler=robot_ws_handler,
     be_socket_client=be_client,
@@ -79,12 +81,16 @@ stream_service = StreamService(pipeline_service)
 # 3. Background Worker & Services Initialization
 # ==========================================
 def sync_features():
-    """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug."""
+    """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug (semua robot)."""
     import time
     while True:
-        features, _ = pipeline_service.get_latest_results()
-        if features:
-            feature_store.update(features)
+        try:
+            all_res = pipeline_service.get_all_results()
+            for _rid, features in all_res.items():
+                if features:
+                    feature_store.update(features)
+        except Exception:
+            pass
         time.sleep(0.03)  # ~30ms
 
 def start_background_services():
@@ -274,10 +280,10 @@ if sock is not None:
                     logger.warning(f"[{robot_id}] Frame ditolak: Robot belum terdaftar atau inaktif di sistem.")
                     continue
 
-                current_robot_id = robot_id
-
-                # Daftarkan socket aktif ke trigger service
-                robot_trigger_service.register_connection(robot_id, ws)
+                if current_robot_id != robot_id:
+                    current_robot_id = robot_id
+                    # Daftarkan socket aktif ke trigger service hanya sekali saat robot pertama terdeteksi
+                    robot_trigger_service.register_connection(robot_id, ws)
 
                 frame_counter += 1
                 if frame_counter % 30 == 0:
@@ -327,20 +333,50 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    """MJPEG stream debug — menampilkan frame terakhir yang diproses."""
+    """MJPEG stream debug — frame terakhir robot yang dipilih (query ?robot_id=, default: aktif terakhir)."""
+    robot_id = request.args.get('robot_id')
     return Response(
-        stream_service.generate_frames(),
+        stream_service.generate_frames(robot_id=robot_id),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+
+@app.route('/api/robots', methods=['GET'])
+def api_robots():
+    """Daftar robot yang pernah mengirim frame + status aktif. Untuk tab dashboard multi-robot."""
+    robots = pipeline_service.list_robots()
+    # Gabungkan info store (fallback bila pipeline belum ada state tapi store ada)
+    try:
+        store_robots = {r["robot_id"]: r for r in feature_store.list_robots()}
+        for r in robots:
+            if r["robot_id"] in store_robots:
+                s = store_robots[r["robot_id"]]
+                r["last_seen"] = max(r["last_seen"] or 0, s["last_seen"] or 0)
+                r["is_active"] = r["is_active"] or s["is_active"]
+        for rid, s in store_robots.items():
+            if not any(r["robot_id"] == rid for r in robots):
+                robots.append(s)
+        robots.sort(key=lambda r: r.get("last_seen") or 0, reverse=True)
+    except Exception:
+        pass
+    return jsonify({"success": True, "data": robots, "count": len(robots)})
 
 @app.route('/api/features', methods=['GET'])
 def api_features():
     """
-    Endpoint debug JSON — menampilkan fitur terakhir yang diekstrak dari pipeline CV.
+    Endpoint debug JSON — fitur terakhir pipeline CV.
+    Query opsional ?robot_id= untuk tab multi-robot (default: robot aktif terakhir).
     Mengembalikan 404 jika belum ada robot yang connect dan mengirim frame.
     """
-    data = feature_store.get()
+    robot_id = request.args.get('robot_id')
+    data = feature_store.get(robot_id=robot_id)
     if data is None:
+        if robot_id:
+            return jsonify({
+                "success": False,
+                "error": f"Belum ada data fitur untuk robot '{robot_id}'.",
+                "hint": "Pastikan robot_id benar dan robot sudah mengirim frame.",
+                "robot_id": robot_id,
+            }), 404
         return jsonify({
             "success": False,
             "error": "Belum ada data fitur. Robot belum connect atau belum ada frame yang diproses.",
@@ -351,49 +387,133 @@ def api_features():
 @app.route('/api/robot/trigger-test', methods=['GET', 'POST'])
 def api_trigger_robot_test():
     """
-    Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry") ke robot.
-    Menerima parameter 'trigger' dan opsional 'robot_id'.
+    Endpoint manual untuk menguji pengiriman trigger pesan teks ("normal", "5", "10", "dry", "20") ke robot.
+    Mendukung opsi durasi hold (default 20.0 detik) agar tidak langsung tertimpa deteksi real-time AI kamera.
+    Menerima parameter 'trigger', opsional 'robot_id', dan opsional 'duration'.
     """
+    duration = 20.0
     if request.method == 'POST':
         data = request.get_json(silent=True) or request.form.to_dict() or {}
         trigger = data.get('trigger')
         robot_id = data.get('robot_id')
+        if 'duration' in data:
+            try:
+                duration = float(data['duration'])
+            except (ValueError, TypeError):
+                duration = 20.0
     else:
         trigger = request.args.get('trigger')
         robot_id = request.args.get('robot_id')
+        if request.args.get('duration'):
+            try:
+                duration = float(request.args.get('duration'))
+            except (ValueError, TypeError):
+                duration = 20.0
 
     if not trigger:
         return jsonify({
             "success": False,
             "error": "Parameter 'trigger' wajib diisi.",
-            "supported_triggers": ["normal", "5", "10", "dry"],
-            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"dry\", \"robot_id\": \"dummyrobot01\"}'"
+            "supported_triggers": ["normal", "5", "10", "dry", "20", "auto"],
+            "example_curl": "curl -X POST http://localhost:5000/api/robot/trigger-test -H 'Content-Type: application/json' -d '{\"trigger\": \"20\", \"robot_id\": \"dummyrobot01\", \"duration\": 20}'"
         }), 400
 
     trigger_clean = str(trigger).strip().lower()
-    if trigger_clean not in {"normal", "5", "10", "dry"}:
+
+    # Opsi reset kembali ke deteksi otomatis AI sebelum 20s habis
+    if trigger_clean in {"auto", "reset"}:
+        robot_trigger_service.clear_manual_override(robot_id)
+        return jsonify({
+            "success": True,
+            "message": "Manual override dibatalkan, kendali dikembalikan penuh ke AI kamera.",
+            "trigger": "auto",
+            "robot_id": robot_id
+        }), 200
+
+    if trigger_clean not in {"normal", "5", "10", "dry", "20"}:
         return jsonify({
             "success": False,
             "error": f"Trigger '{trigger}' tidak valid.",
-            "supported_triggers": ["normal", "5", "10", "dry"]
+            "supported_triggers": ["normal", "5", "10", "dry", "20", "auto"]
         }), 400
 
-    # Jika robot_id tidak disebutkan, kirim ke semua robot yang terhubung
+    trigger_previews = {
+        "normal": {
+            "lcd_command": "normal",
+            "speaker_command": "none",
+            "lcd_label": "Muka Normal (Kedip Normal)",
+            "speaker_label": "Tidak Bersuara"
+        },
+        "5": {
+            "lcd_command": "fatigue_5m",
+            "speaker_command": "none",
+            "lcd_label": "Muka Sayu (Mata Lelah 5 Menit Pertama)",
+            "speaker_label": "Tidak Bersuara"
+        },
+        "10": {
+            "lcd_command": "fatigue_10m",
+            "speaker_command": "bip-bip",
+            "lcd_label": "Muka Kesal/Tajam (Mata Lelah >= 10 Menit)",
+            "speaker_label": "Suara 'bip-bip' (Peringatan Mata Lelah 10m)"
+        },
+        "dry": {
+            "lcd_command": "dry_eye",
+            "speaker_command": "pop-pop",
+            "lcd_label": "Muka Kecewa/Sipit (Terdeteksi Mata Kering)",
+            "speaker_label": "Suara 'pop-pop' (Deteksi Mata Kering)"
+        },
+        "20": {
+            "lcd_command": "break_20m",
+            "speaker_command": "ting-tong",
+            "lcd_label": "Muka Senang (Peringatan Istirahat 20 Detik)",
+            "speaker_label": "Suara 'ting-tong' (Pengingat Istirahat)"
+        },
+    }
+    meta = trigger_previews.get(trigger_clean, {}).copy()
+    meta["trigger"] = trigger_clean
+    meta["face_code"] = FACE_CODE_MAP.get(meta.get("lcd_command", "normal"), "ROBOT_FACE_1_NEUTRAL")
+
+    feature_store.update_hardware_trigger(
+        trigger=trigger_clean,
+        robot_id=robot_id,
+        lcd_cmd=meta.get("lcd_command"),
+        speaker_cmd=meta.get("speaker_command"),
+        lcd_label=meta.get("lcd_label"),
+        speaker_label=meta.get("speaker_label"),
+    )
+
+    # Kirim juga via socketio robot_action jika robot menggunakan SocketIO
+    hw_cmd_payload = {
+        "robot_id": robot_id,
+        "face_code": meta.get("face_code"),
+        "speaker_command": meta.get("speaker_command", "none"),
+        "lcd_command": meta.get("lcd_command", "normal"),
+        "timestamp": time.time()
+    }
+    if robot_id:
+        robot_ws_handler.send_hardware_command(robot_id, hw_cmd_payload)
+    else:
+        for rid in robot_trigger_service.get_connected_robots():
+            robot_ws_handler.send_hardware_command(rid, hw_cmd_payload)
+
+    # Set manual override holding (default 20 detik)
     if not robot_id:
-        count = robot_trigger_service.broadcast_trigger(trigger_clean, force=True)
+        count = robot_trigger_service.broadcast_manual_override(trigger_clean, duration_sec=duration, meta=meta)
         return jsonify({
             "success": True,
-            "message": f"Trigger '{trigger_clean}' berhasil dibroadcast ke {count} robot terhubung.",
+            "message": f"Trigger '{trigger_clean}' berhasil dibroadcast dengan hold {duration}s ke {count} robot terhubung.",
             "trigger": trigger_clean,
+            "hold_duration_sec": duration,
             "broadcast_count": count
         }), 200
 
-    sent = robot_trigger_service.send_trigger(robot_id, trigger_clean, force=True)
+    sent = robot_trigger_service.set_manual_override(robot_id, trigger_clean, duration_sec=duration, meta=meta)
     return jsonify({
         "success": True,
-        "message": f"Trigger '{trigger_clean}' dikirim ke robot '{robot_id}'.",
+        "message": f"Trigger '{trigger_clean}' dikirim ke robot '{robot_id}' dengan hold {duration}s.",
         "robot_id": robot_id,
         "trigger": trigger_clean,
+        "hold_duration_sec": duration,
         "delivered_to_hardware": sent,
         "hardware_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
@@ -406,6 +526,8 @@ def api_get_robot_trigger_status():
         "success": True,
         "robot_id": robot_id,
         "current_trigger": robot_trigger_service.get_last_trigger(robot_id),
+        "manual_override_active": robot_trigger_service.is_in_manual_override(robot_id),
+        "manual_override_remaining_sec": round(robot_trigger_service.get_manual_override_remaining(robot_id), 1),
         "is_connected": robot_trigger_service.is_connected(robot_id)
     }), 200
 
@@ -580,7 +702,13 @@ def api_config():
             val = float(data['ear_threshold'])
             if 0.1 <= val <= 0.5:
                 settings.EAR_THRESHOLD = val
-                updated['ear_threshold'] = val
+                # Propagasi live ke semua analyzer robot aktif
+                try:
+                    n = pipeline_service.set_ear_threshold(val)
+                    updated['ear_threshold'] = val
+                    updated['robots_updated'] = n
+                except Exception:
+                    updated['ear_threshold'] = val
 
         if 'consec_frames' in data:
             val = int(data['consec_frames'])
@@ -624,14 +752,17 @@ def api_config():
 @app.route('/api/pipeline/status', methods=['GET'])
 def api_pipeline_status():
     """
-    Ambil status detail pipeline CV.
+    Ambil status detail pipeline CV (opsional ?robot_id= untuk tab multi-robot).
     """
-    data = feature_store.get()
+    robot_id = request.args.get('robot_id')
+    data = feature_store.get(robot_id=robot_id)
     return jsonify({
         "success": True,
         "data": {
             "be_connected": be_client.is_connected,
             "be_url": settings.BE_URL,
+            "robot_id": robot_id,
+            "robots": pipeline_service.list_robots(),
             "last_features": data,
             "has_active_frame": data is not None
         }
@@ -646,7 +777,6 @@ def api_logs():
     """
     def generate_log_stream():
         yield "data: [SYS] ✅ Terhubung ke log stream socasob-ml (in-process)\n\n"
-
         sub_queue = log_broadcaster.subscribe()
         try:
             while True:

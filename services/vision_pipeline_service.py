@@ -61,6 +61,9 @@ class VisionPipelineService:
         # Shared state untuk hasil akhir (thread-safe) — untuk endpoint debug
         self.latest_features: Dict[str, Any] = {}
         self.latest_annotated_frame: Optional[np.ndarray] = None
+        self.frames_by_robot: Dict[str, np.ndarray] = {}
+        self.features_by_robot: Dict[str, Dict[str, Any]] = {}
+        self.last_frame_time_by_robot: Dict[str, float] = {}
         self.lock = threading.Lock()
 
         self.is_running = False
@@ -201,6 +204,10 @@ class VisionPipelineService:
                 with self.lock:
                     self.latest_features = features
                     self.latest_annotated_frame = annotated_frame
+                    if robot_id:
+                        self.frames_by_robot[robot_id] = annotated_frame
+                        self.features_by_robot[robot_id] = features
+                        self.last_frame_time_by_robot[robot_id] = current_time
 
 
                 # 7. Push Channel A (real-time) ke BE
@@ -228,26 +235,36 @@ class VisionPipelineService:
                 logger.error(f"Error pada vision pipeline loop: {e}", exc_info=True)
                 time.sleep(0.01)
 
-    def get_latest_results(self) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
+    def get_latest_results(self, robot_id: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[np.ndarray]]:
         with self.lock:
-            if self.latest_annotated_frame is None:
-                return self.latest_features, None
+            if robot_id and robot_id in self.frames_by_robot:
+                feat = self.features_by_robot.get(robot_id, self.latest_features)
+                ann = self.frames_by_robot[robot_id]
+                last_time = self.last_frame_time_by_robot.get(robot_id, self.last_frame_time)
+            else:
+                feat = self.latest_features
+                ann = self.latest_annotated_frame
+                last_time = self.last_frame_time
+
+            if ann is None:
+                return feat, None
             
-            frame_copy = self.latest_annotated_frame.copy()
-            # Jika tidak ada frame baru selama > 2.5 detik, tampilkan status offline/waiting overlay
-            if time.time() - self.last_frame_time > 2.5 and frame_copy is not None:
+            frame_copy = ann.copy()
+            # Jika tidak ada frame baru selama > 3.0 detik, tampilkan status offline/waiting overlay
+            if time.time() - last_time > 3.0 and frame_copy is not None:
                 h, w = frame_copy.shape[:2]
                 cv2.rectangle(frame_copy, (0, h // 2 - 30), (w, h // 2 + 30), (0, 0, 150), -1)
+                lbl = f"ESP32-CAM ({robot_id or 'ROBOT'}) OFFLINE / WAITING..."
                 cv2.putText(
                     frame_copy,
-                    "ESP32-CAM OFFLINE / WAITING FRAME...",
+                    lbl,
                     (20, h // 2 + 8),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.55,
                     (255, 255, 255),
                     2
                 )
-            return self.latest_features, frame_copy
+            return feat, frame_copy
 
     def stop(self) -> None:
         logger.info("Menghentikan VisionPipelineService...")

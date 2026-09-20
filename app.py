@@ -19,6 +19,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 import os
+import time
 import base64
 import numpy as np
 import cv2
@@ -82,7 +83,6 @@ stream_service = StreamService(pipeline_service)
 # ==========================================
 def sync_features():
     """Sinkronisasi hasil pipeline ke FeatureStore untuk endpoint debug (semua robot)."""
-    import time
     while True:
         try:
             all_res = pipeline_service.get_all_results()

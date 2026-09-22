@@ -18,6 +18,7 @@ from utils.logger import get_logger
 from config import settings
 
 from realtime.daily_hardware_policy import DailyHardwarePolicy
+from vision.distance_estimator import DistanceEstimator
 
 logger = get_logger(__name__)
 
@@ -58,6 +59,7 @@ class VisionPipelineService:
         self.visualizer = Visualizer()
         self.fps_counter = FPSCounter()
         self.daily_policy = DailyHardwarePolicy()
+        self.distance_estimator = DistanceEstimator()
 
         # Shared state untuk hasil akhir (thread-safe) — untuk endpoint debug
         self.latest_features: Dict[str, Any] = {}
@@ -127,6 +129,7 @@ class VisionPipelineService:
                 left_eye, right_eye = None, None
                 avg_ear = 0.0
                 eye_status = "Unknown"
+                estimated_distance_cm = None
 
                 if face_detected and landmarks:
                     h, w = frame.shape[:2]
@@ -135,6 +138,21 @@ class VisionPipelineService:
                     ear_right = calculate_ear(right_eye)
                     avg_ear = (ear_left + ear_right) / 2.0
                     eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
+                    estimated_distance_cm = self.distance_estimator.estimate(landmarks, w, h)
+
+                # Prioritas distance_cm: dari sensor robot jika ada, atau estimasi CV vision
+                distance_cm = distance_json.get("distance_cm")
+                if distance_cm is None and "distance_mm" in distance_json:
+                    try:
+                        distance_cm = round(float(distance_json["distance_mm"]) / 10.0, 1)
+                    except (ValueError, TypeError):
+                        pass
+                if distance_cm is None:
+                    distance_cm = estimated_distance_cm
+
+                # Update jarak jika estimasi tersedia dan sensor robot belum kirim status eksplisit
+                if distance_cm is not None and "distance" not in distance_json:
+                    distance = "Dekat" if distance_cm < 30.0 else "Jauh"
 
                 # 2. Analisis Kondisi Mata
                 blink_event, metrics_dict = self.eye_analyzer.process_frame(
@@ -164,12 +182,11 @@ class VisionPipelineService:
                 )
 
                 # 4. ML policy adalah satu-satunya pembuat command hardware.
-                distance_numeric_cm = distance_json.get("distance_cm")
                 incomplete_blink = blink_event and metrics_dict.get("incomplete", False)
                 hw_policy_results = self.daily_policy.update(
                     robot_id=robot_id,
                     face_detected=face_detected,
-                    distance_cm=distance_numeric_cm,
+                    distance_cm=distance_cm,
                     blink_event=blink_event,
                     incomplete_blink=incomplete_blink
                 )
@@ -187,7 +204,7 @@ class VisionPipelineService:
                     "frame_size_mb": frame_size_mb,
                     "frame_size_formatted": f"{frame_size_mb:.4f} MB ({frame_size_kb:.1f} KB)",
                     "distance": distance,
-                    "distance_cm": distance_numeric_cm,
+                    "distance_cm": distance_cm,
                     "confidence": confidence,
                     "health_status": metrics_dict["health_status"],
                     "eye_conditions": metrics_dict["conditions"],

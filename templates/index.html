@@ -240,7 +240,10 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
       <div class="card-sm pad rel" id="dist-card">
         <div class="deco" style="background:color-mix(in srgb,var(--color-signal-blue) 15%,transparent)"></div>
         <div style="display:flex;align-items:center;justify-content:space-between"><span class="label">Jarak layar</span><span id="dist-tag" class="tag mut">Offline</span></div>
-        <div id="dist-value" class="big" style="color:var(--text-muted)">N/A</div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin:.25rem 0 .15rem">
+          <div id="dist-cm" class="big" style="color:var(--text-muted);font-variant-numeric:tabular-nums">-- <span style="font-size:1rem;font-weight:600;color:var(--text-muted)">cm</span></div>
+          <div id="dist-value" style="font-size:0.95rem;font-weight:800;color:var(--text-muted)">N/A</div>
+        </div>
         <p id="dist-desc" class="desc">Hubungkan robot / kirim frame via WebSocket.</p>
         <div class="divider">
           <div style="display:flex;justify-content:space-between;font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:.4rem"><span>CONFIDENCE ML</span><span id="conf-val" class="mono">0%</span></div>
@@ -480,6 +483,8 @@ if (resetBtn) {
       $('eye-status').textContent = 'N/A';
       $('fat-value').textContent = 'Normal / Sehat';
       $('fat-value').style.color = 'var(--color-success)';
+      $('dist-cm').innerHTML = '-- <span style="font-size:1rem;font-weight:600;color:var(--text-muted)">cm</span>';
+      $('dist-cm').style.color = 'var(--text-muted)';
       $('dist-value').textContent = 'Jarak Aman';
       $('dist-value').style.color = 'var(--color-success)';
       $('dist-desc').textContent = 'Jarak aman ≥ 30 cm. Pertahankan!';
@@ -584,11 +589,23 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('fat-value').textContent=eyeLabel;$('fat-value').style.color=eye==='normal'?'var(--color-success)':eye==='risk_myopia'?'var(--color-warning)':'var(--color-error)';
   $('fat-desc').textContent=rec;
   // distance card
-  const close=dist==='Dekat';
-  $('dist-value').textContent=close?'Terlalu Dekat':'Jarak Aman';$('dist-value').style.color=!close?'var(--color-success)':'var(--color-error)';
-  $('dist-desc').textContent=close?'Kurang dari 30 cm — mundur sedikit!':'Jarak aman ≥ 30 cm. Pertahankan!';
-  setTag($('dist-tag'),close?'Dekat':'Aman',close?'bad':'ok');
-  $('conf-val').textContent=conf+'%';const cb=$('conf-bar');cb.style.width=conf+'%';cb.style.background=conf>=85?'var(--color-success)':conf>=65?'var(--color-warning)':'var(--color-error)';
+  const distCm = d.distance_cm != null ? Number(d.distance_cm) : (d.distance_mm != null ? Number(d.distance_mm) / 10 : null);
+  const close = dist === 'Dekat' || (distCm !== null && distCm < 30.0);
+  if (distCm !== null && !isNaN(distCm)) {
+    $('dist-cm').innerHTML = `${distCm.toFixed(1)} <span style="font-size:1rem;font-weight:600;color:var(--text-muted)">cm</span>`;
+    $('dist-cm').style.color = close ? 'var(--color-error)' : 'var(--color-success)';
+  } else {
+    $('dist-cm').innerHTML = `-- <span style="font-size:1rem;font-weight:600;color:var(--text-muted)">cm</span>`;
+    $('dist-cm').style.color = 'var(--text-muted)';
+  }
+  $('dist-value').textContent = close ? 'Terlalu Dekat' : 'Jarak Aman';
+  $('dist-value').style.color = !close ? 'var(--color-success)' : 'var(--color-error)';
+  $('dist-desc').textContent = close ? 'Kurang dari 30 cm, silakan mundur sedikit.' : 'Jarak aman ≥ 30 cm. Pertahankan!';
+  setTag($('dist-tag'), close ? 'Dekat' : 'Aman', close ? 'bad' : 'ok');
+  $('conf-val').textContent = conf + '%';
+  const cb = $('conf-bar');
+  cb.style.width = conf + '%';
+  cb.style.background = conf >= 85 ? 'var(--color-success)' : conf >= 65 ? 'var(--color-warning)' : 'var(--color-error)';
   // perclos/blink/ear
   $('perclos-value').textContent=((d.perclos||0)*100).toFixed(1);
   $('blink-rate').textContent=Number(d.blink_rate||0).toFixed(1);

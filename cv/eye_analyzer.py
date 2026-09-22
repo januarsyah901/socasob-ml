@@ -92,8 +92,10 @@ class EyeConditionAnalyzer:
         # 2. Update detector kedipan
         event = self.detector.update(ear_value, face_confidence, timestamp)
         blink_event = False
+        incomplete_blink = False
         if event:
             blink_event = True
+            incomplete_blink = event.get("incomplete", False)
             self.lifetime_blinks += 1
             self.window.add_blink(event)
 
@@ -108,6 +110,7 @@ class EyeConditionAnalyzer:
         metrics_dict = {
             "eye_state": self.detector.state.value,
             "blink_event": blink_event,
+            "incomplete": incomplete_blink,
             "blink_count": len(self.window.blink_events),
             "lifetime_blinks": self.lifetime_blinks,
             "raw_blink_rate": round(self.window.raw_blink_rate_per_minute(), 2),

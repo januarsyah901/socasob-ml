@@ -14,6 +14,7 @@ from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
+import struct
 
 from camera.base import CameraSource
 from utils.logger import get_logger
@@ -21,33 +22,47 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+
 def decode_websocket_packet(
     packet: bytes,
     device_id_size: int = 16,
-) -> Optional[Union[Tuple[str, np.ndarray], Tuple[str, np.ndarray, bool]]]:
+) -> Optional[Union[Tuple[str, np.ndarray], Tuple[str, np.ndarray, bool], Tuple[str, np.ndarray, bool, float]]]:
     """
     Decode paket biner dari ESP32-CAM secara dinamis.
 
     Mendukung 3 format:
-    1. Dynamic format robot (firmware PEKAEM): [id_len (1B)][device_id][is_dekat (1B)][JPEG]
-    2. Raw JPEG / Dynamic ID (Mencari marker 0xFF 0xD8 secara dinamis)
-    3. Legacy format: [device_id (N bytes)] + [JPEG data]
+    1. Dynamic format robot v2: [id_len (1B)][device_id][is_dekat (1B)][0xA5 (1B)][distance_mm uint16 big-endian][JPEG]
+    2. Dynamic format robot v1: [id_len (1B)][device_id][is_dekat (1B)][JPEG]
+    3. Raw JPEG / Dynamic ID (Mencari marker 0xFF 0xD8 secara dinamis)
+    4. Legacy format: [device_id (N bytes)] + [JPEG data]
 
     Returns:
-        Tuple (device_id, frame_bgr) atau (device_id, frame_bgr, is_dekat) atau None jika gagal decode.
+        Tuple (device_id, frame_bgr) atau (device_id, frame_bgr, is_dekat) atau (device_id, frame_bgr, is_dekat, distance_mm) atau None jika gagal decode.
     """
     if not packet or len(packet) < 4:
         return None
 
-    # 1. Format Dynamic Robot (firmware PEKAEM)
+    # Format Dynamic Robot (firmware PEKAEM)
     id_len = packet[0]
-    if 1 <= id_len <= 64 and len(packet) > (1 + id_len + 1 + 2):
-        jpeg_part = packet[1 + id_len + 1:]
+    if 1 <= id_len <= 64 and len(packet) > (1 + id_len + 1):
+        device_id = packet[1:1 + id_len].decode("ascii", errors="replace").strip()
+        is_dekat = bool(packet[1 + id_len])
+        
+        idx = 1 + id_len + 1
+        distance_mm = None
+        
+        # Check for v2 marker 0xA5
+        if len(packet) > idx + 2 and packet[idx] == 0xA5:
+            # Decode 2 bytes unsigned short big-endian
+            distance_mm = float(struct.unpack(">H", packet[idx+1:idx+3])[0])
+            idx += 3
+        
+        jpeg_part = packet[idx:]
         if jpeg_part.startswith(b"\xff\xd8"):
-            device_id = packet[1:1 + id_len].decode("ascii", errors="replace").strip()
-            is_dekat = bool(packet[1 + id_len])
             frame = cv2.imdecode(np.frombuffer(jpeg_part, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
+                if distance_mm is not None:
+                    return device_id, frame, is_dekat, distance_mm
                 return device_id, frame, is_dekat
 
     # 2. Cari marker awal JPEG (0xFF 0xD8) secara dinamis

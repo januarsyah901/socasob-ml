@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Optional, Tuple, Union
+from typing import NamedTuple, Optional
 from urllib.parse import urlparse
 
 import cv2
@@ -12,30 +12,49 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class DecodedWebSocketPacket(NamedTuple):
+    """Decoded firmware frame and distance metadata."""
+
+    robot_id: str
+    frame: np.ndarray
+    is_dekat: bool
+    distance_cm: Optional[float]
+
+
 def decode_websocket_packet(
     packet: bytes,
     device_id_size: int = 16,
-) -> Optional[Union[Tuple[str, np.ndarray], Tuple[str, np.ndarray, bool]]]:
+) -> Optional[DecodedWebSocketPacket]:
     """
     Decode paket biner dari ESP32-CAM.
-    Mendukung 3 format:
-    1. Dynamic format robot (firmware PEKAEM): [id_len (1B)][device_id][is_dekat (1B)][JPEG]
+    Mendukung format firmware:
+    1. v1: [id_len][robot_id][is_dekat][JPEG]
+    2. v2: [id_len][robot_id][is_dekat][0xA5][distance_mm][JPEG]
     2. Raw JPEG / Dynamic ID (Mencari marker 0xFF 0xD8 secara dinamis)
     3. Legacy format: [device_id (N bytes)][JPEG]
     """
     if not packet or len(packet) < 4:
         return None
 
-    # 1. Format Dynamic Robot (firmware PEKAEM)
+    # 1. Format Dynamic Robot: baca header wajib sebelum mencari JPEG.
     id_len = packet[0]
-    if 1 <= id_len <= 64 and len(packet) > (1 + id_len + 1 + 2):
-        jpeg_part = packet[1 + id_len + 1:]
+    header_end = 1 + id_len + 1
+    if 1 <= id_len <= 64 and len(packet) > header_end:
+        device_id = packet[1:1 + id_len].decode("ascii", errors="replace").strip()
+        is_dekat = bool(packet[1 + id_len])
+        jpeg_start = header_end
+        distance_cm = None
+
+        if packet[header_end] == 0xA5 and len(packet) >= header_end + 3:
+            distance_mm = int.from_bytes(packet[header_end + 1:header_end + 3], "big")
+            distance_cm = None if distance_mm == 0xFFFF else distance_mm / 10.0
+            jpeg_start = header_end + 3
+
+        jpeg_part = packet[jpeg_start:]
         if jpeg_part.startswith(b"\xff\xd8"):
-            device_id = packet[1:1 + id_len].decode("ascii", errors="replace").strip()
-            is_dekat = bool(packet[1 + id_len])
             frame = cv2.imdecode(np.frombuffer(jpeg_part, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
-                return device_id, frame, is_dekat
+                return DecodedWebSocketPacket(device_id, frame, is_dekat, distance_cm)
 
     # 2. Cari marker awal JPEG (0xFF 0xD8) secara dinamis
     jpeg_start = packet.find(b"\xff\xd8")
@@ -53,7 +72,7 @@ def decode_websocket_packet(
             cv2.IMREAD_COLOR,
         )
         if frame is not None:
-            return device_id, frame, False
+            return DecodedWebSocketPacket(device_id, frame, False, None)
 
     # 3. Fallback jika marker 0xFFD8 tidak ditemukan langsung
     if len(packet) > device_id_size:
@@ -65,7 +84,7 @@ def decode_websocket_packet(
             cv2.IMREAD_COLOR,
         )
         if frame is not None:
-            return device_id, frame, False
+            return DecodedWebSocketPacket(device_id, frame, False, None)
 
     return None
 

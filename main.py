@@ -46,7 +46,6 @@ from vision.metrics_window import MetricsWindow
 
 # Scoring
 from scoring.fatigue_score import calibrate_baseline
-from scoring.active_myopia_guard import ActiveMyopiaGuard
 from scoring.myopia_risk import MyopiaRiskEstimator
 
 # ML
@@ -56,6 +55,7 @@ from ml.engine import InferenceEngine
 from storage.database import HealthDatabase
 from realtime.ws_server import RealtimeWSServer
 from realtime.hardware_controller import HardwareActuatorController
+from realtime.daily_hardware_policy import DailyHardwarePolicy
 
 from config import settings
 from utils.logger import get_logger
@@ -166,10 +166,10 @@ def vision_pipeline_loop(
     blink_detector: BlinkEventDetector,
     distance_estimator: DistanceEstimator,
     metrics_window: MetricsWindow,
-    myopia_guard: ActiveMyopiaGuard,
     myopia_risk: MyopiaRiskEstimator,
     engine: InferenceEngine,
     hw_controller: HardwareActuatorController,
+    daily_policy: DailyHardwarePolicy,
     database: HealthDatabase,
     ws_server: RealtimeWSServer,
     event_loop: asyncio.AbstractEventLoop,
@@ -222,27 +222,40 @@ def vision_pipeline_loop(
         if blink_event:
             metrics_window.add_blink(blink_event)
 
-        # 5. Update Modul B1 (jarak + durasi)
-        guard_result = myopia_guard.update(
-            face_detected=face_detected,
-            distance_cm=distance_cm,
-            timestamp=now,
-        )
-
-        # 6. Update Modul B2 (screen time kumulatif)
+        # 5. Update laporan screen time kumulatif.
         myopia_risk.tick(face_detected)
         risk_result = myopia_risk.get_risk()
 
-        # 7. Jalankan ML Inference Engine
+        # 6. Policy ML menghasilkan command hardware sekaligus ringkasan risiko.
+        incomplete_blink = bool(blink_event and blink_event.get("incomplete", False))
+        hw_policy_results = daily_policy.update(
+            robot_id="local_robot",
+            face_detected=face_detected,
+            distance_cm=distance_cm,
+            blink_event=bool(blink_event),
+            incomplete_blink=incomplete_blink,
+            now=now,
+        )
+
+        # Miopia hanya menjadi laporan; tidak pernah dipakai sebagai command.
+        guard_result = {
+            "distance_cm": distance_cm,
+            "distance_warning": distance_cm is not None and distance_cm < 50.0,
+            "break_state": "break_needed" if hw_policy_results["hardware_command"] == "20" else "active",
+            "work_elapsed_sec": hw_policy_results["continuous_gaze_minutes"] * 60.0,
+            "break_remaining_sec": 0.0,
+        }
+
+        # 7. Jalankan ML Inference Engine untuk laporan backend.
         results = engine.run(
             metrics_window=metrics_window,
             guard_result=guard_result,
             risk_result=risk_result,
         )
 
-        # 8. Evaluasi Perintah Hardware (LCD & Speaker)
-        hw_payload = hw_controller.evaluate(results)
-        results["hardware"] = hw_payload
+        # Policy ML sudah menghasilkan command final; miopia tetap laporan saja.
+        results["hardware"] = hw_policy_results
+        results["hardware_command"] = hw_policy_results["hardware_command"]
 
         # 9. Log ke database (throttled)
         if (now - last_db_log) >= DB_LOG_INTERVAL:
@@ -295,7 +308,6 @@ def main() -> None:
     metrics_window = MetricsWindow(window_seconds=60)
 
     logger.info("[Init] Inisialisasi modul scoring...")
-    myopia_guard = ActiveMyopiaGuard()
     myopia_risk = MyopiaRiskEstimator()
     myopia_risk.start_session()
 
@@ -316,6 +328,7 @@ def main() -> None:
 
     logger.info("[Init] Inisialisasi Hardware Actuator Controller...")
     hw_controller = HardwareActuatorController()
+    daily_policy = DailyHardwarePolicy()
 
     logger.info("[Init] Inisialisasi database...")
     database = HealthDatabase(db_path=DB_PATH)
@@ -340,8 +353,8 @@ def main() -> None:
         target=vision_pipeline_loop,
         args=(
             camera, face_mesh, blink_detector, distance_estimator,
-            metrics_window, myopia_guard, myopia_risk,
-            engine, hw_controller, database, ws_server, loop, stop_event,
+            metrics_window, myopia_risk,
+            engine, hw_controller, daily_policy, database, ws_server, loop, stop_event,
         ),
         daemon=True,
         name="vision-pipeline",

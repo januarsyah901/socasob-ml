@@ -17,7 +17,7 @@ from utils.time_utils import get_current_iso_time
 from utils.logger import get_logger
 from config import settings
 
-from realtime.hardware_controller import HardwareActuatorController
+from realtime.daily_hardware_policy import DailyHardwarePolicy
 
 logger = get_logger(__name__)
 
@@ -57,7 +57,7 @@ class VisionPipelineService:
         self.feature_extractor = FeatureExtractor()
         self.visualizer = Visualizer()
         self.fps_counter = FPSCounter()
-        self.hw_controller = HardwareActuatorController()
+        self.daily_policy = DailyHardwarePolicy()
 
         # Shared state untuk hasil akhir (thread-safe) — untuk endpoint debug
         self.latest_features: Dict[str, Any] = {}
@@ -116,7 +116,7 @@ class VisionPipelineService:
                 iso_time = get_current_iso_time()
                 fps = self.fps_counter.update()
 
-                distance = distance_json.get("distance", "Jauh")
+                distance = distance_json.get("distance", "Tidak diketahui")
                 confidence = distance_json.get("confidence", 0)
 
                 # 1. Deteksi Wajah & Landmark
@@ -163,14 +163,18 @@ class VisionPipelineService:
                     system_status=metrics_dict["system_status"]
                 )
 
-                # 4. Evaluasi Perintah Hardware (LCD & Speaker)
-                eval_dict = {
-                    "fatigue": {"composite_score": metrics_dict["composite_score"], "status": metrics_dict["health_status"]},
-                    "dry_eye": {"status": metrics_dict["system_status"] if "Ringan" in metrics_dict["system_status"] or "Kritis" in metrics_dict["system_status"] else "Aman"},
-                    "myopia_risk": {"break_state": "active", "break_remaining_sec": 0.0}
-                }
-                hw_payload = self.hw_controller.evaluate(eval_dict)
-                trigger_text = hw_payload.get("robot_trigger", "normal")
+                # 4. ML policy adalah satu-satunya pembuat command hardware.
+                distance_numeric_cm = distance_json.get("distance_cm")
+                incomplete_blink = blink_event and metrics_dict.get("incomplete", False)
+                hw_policy_results = self.daily_policy.update(
+                    robot_id=robot_id,
+                    face_detected=face_detected,
+                    distance_cm=distance_numeric_cm,
+                    blink_event=blink_event,
+                    incomplete_blink=incomplete_blink
+                )
+                hw_payload = hw_policy_results
+                trigger_text = hw_payload["hardware_command"]
 
                 # Kirim trigger pesan teks ke robot jika trigger service aktif
                 if self.trigger_service is not None and robot_id:
@@ -183,12 +187,24 @@ class VisionPipelineService:
                     "frame_size_mb": frame_size_mb,
                     "frame_size_formatted": f"{frame_size_mb:.4f} MB ({frame_size_kb:.1f} KB)",
                     "distance": distance,
+                    "distance_cm": distance_numeric_cm,
                     "confidence": confidence,
                     "health_status": metrics_dict["health_status"],
                     "eye_conditions": metrics_dict["conditions"],
                     "recommendations": metrics_dict["recommendations"],
                     "hardware": hw_payload,
                     "robot_trigger": trigger_text,
+                    "hardware_command": trigger_text,
+                    "screen_time_minutes": hw_payload["screen_time_minutes"],
+                    "continuous_gaze_minutes": hw_payload["continuous_gaze_minutes"],
+                    "close_distance_duration_seconds": hw_payload["close_distance_duration_seconds"],
+                    "blink_rate_per_minute": hw_payload["blink_rate_per_minute"],
+                    "incomplete_blink_count": hw_payload["incomplete_blink_count"],
+                    "total_blink_observed": hw_payload["total_blink_observed"],
+                    "incomplete_blink_ratio": hw_payload["incomplete_blink_ratio"],
+                    "fatigue_risk": hw_payload["fatigue_risk"],
+                    "dry_eye_risk": hw_payload["dry_eye_risk"],
+                    "myopia_report_risk": hw_payload["myopia_report_risk"],
                     "work_elapsed_sec": hw_payload.get("work_elapsed_sec", 0),
                     "break_remaining_sec": hw_payload.get("break_remaining_sec", 0)
                 })
@@ -223,14 +239,11 @@ class VisionPipelineService:
                 # 8. Kirim data ke AggregatorService untuk Channel B (1 menit)
                 self.aggregator.ingest(
                     robot_id=robot_id,
-                    distance=distance,
+                    face_detected=face_detected,
+                    distance_cm=distance_numeric_cm,
                     blink_event=blink_event,
-                    blink_rate=metrics_dict["smoothed_blink_rate"],
-                    health_status=metrics_dict["health_status"],
-                    eye_conditions=metrics_dict["conditions"],
-                    recommendations=metrics_dict["recommendations"],
-                    perclos=metrics_dict["perclos"],
-                    composite_score=metrics_dict["composite_score"]
+                    incomplete_blink=incomplete_blink,
+                    policy_summary=hw_payload,
                 )
             except Exception as e:
                 logger.error(f"Error pada vision pipeline loop: {e}", exc_info=True)
@@ -341,10 +354,10 @@ class VisionPipelineService:
         if hasattr(self, 'eye_analyzer') and self.eye_analyzer:
             self.eye_analyzer.reset()
 
-        if hasattr(self, 'hw_controller') and self.hw_controller:
-            self.hw_controller.reset()
-
         if hasattr(self, 'fps_counter') and self.fps_counter:
             self.fps_counter.reset()
+            
+        if hasattr(self, 'daily_policy') and self.daily_policy:
+            self.daily_policy.reset(robot_id)
 
         logger.info(f"[VisionPipeline] Pipeline direset ke kondisi awal untuk '{robot_id or 'all'}'.")

@@ -55,13 +55,13 @@ class HardwareActuatorController:
         self._last_speaker_time = 0.0
         logger.info("[Hardware] Controller berhasil direset ke kondisi awal (startup ready).")
 
-    def evaluate(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    def evaluate(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evaluasi hasil deteksi dari InferenceEngine dan hasilkan perintah hardware.
+        Evaluasi hasil deteksi dari DailyHardwarePolicy dan hasilkan perintah hardware.
 
         Args:
-            results: Dict dari InferenceEngine.run() yang berisi:
-                     'fatigue', 'dry_eye', 'myopia_risk'.
+            results: Dict yang berisi: 'fatigue', 'dry_eye', 'break_reminder'.
+                     Masing-masing bisa bernilai boolean atau dict berisi status.
 
         Returns:
             Dict payload perintah hardware:
@@ -78,14 +78,9 @@ class HardwareActuatorController:
         """
         now = time.time()
 
-        fatigue_data = results.get("fatigue", {})
-        dry_eye_data = results.get("dry_eye", {})
-        myopia_data = results.get("myopia_risk", {})
-
-        fatigue_status = fatigue_data.get("status", "Aman")
-        dry_eye_status = dry_eye_data.get("status", "Aman")
-        break_state = myopia_data.get("break_state", "active")
-        break_remaining = myopia_data.get("break_remaining_sec", 0.0)
+        fatigue_status = results.get("fatigue", False) # Can be "5", "10", or False
+        dry_eye_status = results.get("dry_eye", False)
+        break_reminder = results.get("break_reminder", False)
 
         # ─────────────────────────────────────────────────────────────
         # 1. Event Startup Pertama Kali
@@ -102,30 +97,13 @@ class HardwareActuatorController:
                 break_rem=0.0,
             )
 
-        # ─────────────────────────────────────────────────────────────
-        # 2. Tracking Durasi Fatigue
-        # ─────────────────────────────────────────────────────────────
-        fatigue_duration_sec = 0.0
-        if "Peringatan" in fatigue_status or "Berat" in fatigue_status:
-            if self._fatigue_start_time is None:
-                self._fatigue_start_time = now
-            fatigue_duration_sec = now - self._fatigue_start_time
-            self._is_fatigued = True
-        else:
-            self._fatigue_start_time = None
-            self._is_fatigued = False
-
-        # ─────────────────────────────────────────────────────────────
-        # 3. Evaluasi Kondisi Prioritas
-        # ─────────────────────────────────────────────────────────────
-
         lcd_cmd = "normal"
         speaker_cmd = "none"
         lcd_lbl = "Muka Normal (Kedip Normal)"
         speaker_lbl = "Tidak Bersuara"
 
         # (A) PRIORITAS 1: Selesai Sesi Istirahat 20s -> Trigger Suara "ta-da"
-        if self._was_on_break and (break_state == "active" or break_remaining == 0.0):
+        if self._was_on_break and not break_reminder:
             self._was_on_break = False
             lcd_cmd = "normal"
             speaker_cmd = "ta-da"
@@ -134,12 +112,11 @@ class HardwareActuatorController:
             logger.info("[Hardware] Istirahat 20s selesai -> Trigger: 'ta-da'")
 
         # (B) PRIORITAS 2: Sesi Istirahat 20s Aktif (Break 20 Menit)
-        elif break_state in ("break_needed", "on_break") or break_remaining > 0:
+        elif break_reminder:
             self._was_on_break = True
             lcd_cmd = "break_20m"
             lcd_lbl = "Muka Senang (Peringatan Istirahat 20 Detik)"
             
-            # Sound "ting-tong" dipicu saat istirahat dimulai
             if self._last_speaker_command != "ting-tong" or (now - self._last_speaker_time) > 15.0:
                 speaker_cmd = "ting-tong"
                 speaker_lbl = "Suara 'ting-tong' (Pengingat Istirahat)"
@@ -148,7 +125,7 @@ class HardwareActuatorController:
                 speaker_lbl = "Tidak Bersuara"
 
         # (C) PRIORITAS 3: Terdeteksi Mata Kering
-        elif "Peringatan" in dry_eye_status or "Berat" in dry_eye_status:
+        elif dry_eye_status:
             lcd_cmd = "dry_eye"
             lcd_lbl = "Muka Kecewa/Sipit (Terdeteksi Mata Kering)"
 
@@ -159,10 +136,10 @@ class HardwareActuatorController:
                 speaker_cmd = "none"
                 speaker_lbl = "Tidak Bersuara"
 
-        # (D) PRIORITAS 4: Terdeteksi Mata Lelah
-        elif self._is_fatigued:
+        # (D) PRIORITAS 4: Terdeteksi Mata Lelah (10 Menit)
+        elif fatigue_status == "10":
             lcd_cmd = "fatigue_10m"
-            lcd_lbl = "Muka Kesal/Tajam (Terdeteksi Mata Lelah)"
+            lcd_lbl = "Muka Kesal/Tajam (Terdeteksi Mata Lelah > 10 Menit)"
 
             if self._last_speaker_command != "bip-bip" or (now - self._last_speaker_time) > 15.0:
                 speaker_cmd = "bip-bip"
@@ -171,7 +148,14 @@ class HardwareActuatorController:
                 speaker_cmd = "none"
                 speaker_lbl = "Tidak Bersuara"
 
-        # (E) DEFAULT: Kondisi Normal
+        # (E) PRIORITAS 5: Terdeteksi Mata Lelah Awal (5 Menit)
+        elif fatigue_status == "5":
+            lcd_cmd = "fatigue_5m"
+            lcd_lbl = "Muka Sayu (Terdeteksi Mata Lelah Awal)"
+            speaker_cmd = "none"
+            speaker_lbl = "Tidak Bersuara"
+
+        # (F) DEFAULT: Kondisi Normal
         else:
             lcd_cmd = "normal"
             speaker_cmd = "none"
@@ -188,8 +172,8 @@ class HardwareActuatorController:
             speaker=speaker_cmd,
             lcd_label=lcd_lbl,
             speaker_label=speaker_lbl,
-            fatigue_sec=fatigue_duration_sec,
-            break_rem=break_remaining,
+            fatigue_sec=0.0, # Handled by DailyHardwarePolicy now
+            break_rem=0.0, # Handled by DailyHardwarePolicy now
         )
 
     @staticmethod
@@ -200,6 +184,7 @@ class HardwareActuatorController:
         - 'fatigue_5m'   -> '5'
         - 'fatigue_10m'  -> '10'
         - 'dry_eye'      -> 'dry'
+        - 'break_20m'    -> '20'
         - default        -> 'normal'
         """
         mapping = {
@@ -207,6 +192,7 @@ class HardwareActuatorController:
             "fatigue_5m": "5",
             "fatigue_10m": "10",
             "dry_eye": "dry",
+            "break_20m": "20",
         }
         return mapping.get(lcd_cmd, "normal")
 

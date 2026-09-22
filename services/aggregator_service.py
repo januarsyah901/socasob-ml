@@ -1,75 +1,57 @@
 # services/aggregator_service.py
-#
-# Modul ini mengakumulasi data hasil analisis per-frame selama 60 detik,
-# lalu menghasilkan satu payload ringkasan (summary) yang dikirim ke Backend
-# via Channel B (py-minute-summary).
-#
-# Data yang diakumulasi per menit:
-#   - Durasi "Dekat" dan "Jauh" dalam detik
-#   - Total kedipan & rata-rata blink rate
-#   - Rata-rata PERCLOS & Fatigue Score komposit
-#   - Health status & kondisi mata dari EyeConditionAnalyzer
 
 import time
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 from utils.time_utils import get_current_iso_time
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Durasi satu window agregasi (detik)
 AGGREGATION_WINDOW_SEC = 60
 
-
 class AggregatorService:
-    """
-    Mengakumulasi data deteksi per-frame selama satu menit,
-    lalu memanggil callback dengan payload ringkasan untuk dikirim ke BE.
-    """
-
     def __init__(self, on_summary: Callable[[dict], None], trigger_service=None):
-        """
-        Args:
-            on_summary: Callback yang dipanggil setiap 1 menit dengan payload summary.
-                        Biasanya ini memanggil be_socket_client.emit_minute_summary().
-            trigger_service: Instance RobotTriggerService (opsional).
-        """
         self._on_summary = on_summary
         self._trigger_service = trigger_service
         self._lock = threading.Lock()
-        self._reset_state()
+        
+        # State per robot
+        self._robots: Dict[str, Dict[str, Any]] = {}
 
         self._thread: threading.Thread | None = None
         self._running = False
 
-    def _reset_state(self) -> None:
-        """Reset semua counter untuk window baru."""
-        self._robot_id: str | None = None
-        self._period_start: str = get_current_iso_time()
-        self._near_sec: float = 0.0
-        self._far_sec: float = 0.0
-        self._blink_count: int = 0
-        self._blink_rate_samples: list[float] = []
-        self._perclos_samples: list[float] = []
-        self._composite_score_samples: list[float] = []
-        self._health_statuses: list[str] = []
-        self._eye_conditions: list[str] = []
-        self._recommendations: list[str] = []
-        self._last_frame_time: float = time.time()
+    def _get_robot_state(self, robot_id: str) -> Dict[str, Any]:
+        if robot_id not in self._robots:
+            self._robots[robot_id] = {
+                "period_start": get_current_iso_time(),
+                "screen_duration_sec": 0.0,
+                "blink_count": 0,
+                "incomplete_blink_count": 0,
+                
+                "continuous_distance_below_50_sec": 0.0,
+                "distance_below_50_cm_for_at_least_10_seconds": 0,
+                
+                "distance_below_20_cm_detected": False,
+                
+                "current_continuous_gaze_sec": 0.0,
+                "longest_continuous_gaze_sec": 0.0,
+                
+                "distance_sum_cm": 0.0,
+                "distance_count": 0,
+                "policy_summary": {},
+                
+                "last_frame_time": time.time()
+            }
+        return self._robots[robot_id]
 
     def reset(self) -> None:
-        """Reset seluruh akumulasi data counter aggregator."""
         with self._lock:
-            self._reset_state()
+            self._robots.clear()
         logger.info("[Aggregator] State counter berhasil direset.")
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     def start(self) -> None:
-        """Mulai background thread yang menjalankan timer 1 menit."""
         if self._running:
             return
         self._running = True
@@ -82,68 +64,78 @@ class AggregatorService:
         logger.info("[Aggregator] Service dimulai. Window = 60 detik.")
 
     def stop(self) -> None:
-        """Hentikan background thread aggregator."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
         logger.info("[Aggregator] Service dihentikan.")
 
     def _aggregation_loop(self) -> None:
-        """Loop yang menunggu 60 detik lalu memanggil _flush_summary."""
         while self._running:
             time.sleep(AGGREGATION_WINDOW_SEC)
             if self._running:
                 self._flush_summary()
 
-    # ------------------------------------------------------------------
-    # Data Ingestion (dipanggil tiap frame dari VisionPipelineService)
-    # ------------------------------------------------------------------
-
-    def ingest(self, robot_id: str, distance: str, blink_event: bool,
-               blink_rate: float, health_status: str,
-               eye_conditions: list[str], recommendations: list[str],
-               perclos: float = 0.0, composite_score: float = 0.0,
-               features: Optional[dict] = None) -> None:
+    def ingest(self, 
+               robot_id: str, 
+               face_detected: bool,
+               distance_cm: Optional[float], 
+               blink_event: bool, 
+               incomplete_blink: bool,
+               policy_summary: Optional[Dict[str, Any]] = None,
+               **kwargs) -> None:
         """
-        Terima data satu frame untuk diakumulasi.
+        Terima data satu frame untuk diakumulasi per robot.
         """
         current_time = time.time()
 
         with self._lock:
-            # Simpan robot_id dari frame pertama di window ini
-            if self._robot_id is None:
-                self._robot_id = robot_id
+            state = self._get_robot_state(robot_id)
+            if policy_summary:
+                state["policy_summary"] = {
+                    key: policy_summary[key]
+                    for key in (
+                        "screen_time_minutes", "continuous_gaze_minutes", "distance_cm",
+                        "close_distance_duration_seconds", "blink_rate_per_minute",
+                        "incomplete_blink_count", "total_blink_observed",
+                        "incomplete_blink_ratio", "fatigue_risk", "dry_eye_risk",
+                        "myopia_report_risk", "hardware_command",
+                    )
+                    if key in policy_summary
+                }
 
-            # Hitung delta waktu antar frame untuk akurasi durasi
-            delta = current_time - self._last_frame_time
-            # Batasi delta maksimal 1 detik untuk mencegah jump jika lag
+            delta = current_time - state["last_frame_time"]
             delta = min(delta, 1.0)
-            self._last_frame_time = current_time
+            state["last_frame_time"] = current_time
 
-            # Akumulasi durasi berdasarkan status jarak
-            if distance == "Dekat":
-                self._near_sec += delta
+            if face_detected:
+                state["screen_duration_sec"] += delta
+                state["current_continuous_gaze_sec"] += delta
+                
+                if state["current_continuous_gaze_sec"] > state["longest_continuous_gaze_sec"]:
+                    state["longest_continuous_gaze_sec"] = state["current_continuous_gaze_sec"]
+                
+                if distance_cm is not None:
+                    state["distance_sum_cm"] += distance_cm
+                    state["distance_count"] += 1
+                    
+                    if distance_cm < 20.0:
+                        state["distance_below_20_cm_detected"] = True
+                        
+                    if distance_cm < 50.0:
+                        state["continuous_distance_below_50_sec"] += delta
+                        if state["continuous_distance_below_50_sec"] >= 10.0:
+                            state["distance_below_50_cm_for_at_least_10_seconds"] = 1
+                    else:
+                        state["continuous_distance_below_50_sec"] = 0.0
             else:
-                self._far_sec += delta
+                state["current_continuous_gaze_sec"] = 0.0
+                state["continuous_distance_below_50_sec"] = 0.0
 
-            # Akumulasi blink
             if blink_event:
-                self._blink_count += 1
+                state["blink_count"] += 1
+                if incomplete_blink:
+                    state["incomplete_blink_count"] += 1
 
-            # Simpan sample blink rate & komposit
-            if blink_rate > 0:
-                self._blink_rate_samples.append(blink_rate)
-            self._perclos_samples.append(perclos)
-            self._composite_score_samples.append(composite_score)
-
-            # Simpan health status dan kondisi
-            self._health_statuses.append(health_status)
-            self._eye_conditions.extend(eye_conditions)
-            self._recommendations.extend(recommendations)
-
-    # ------------------------------------------------------------------
-    # Summary Flush
-    # ------------------------------------------------------------------
 
     def _flush_summary(self) -> None:
         """
@@ -151,74 +143,38 @@ class AggregatorService:
         panggil callback, lalu reset state untuk window berikutnya.
         """
         with self._lock:
-            robot_id = self._robot_id
-            period_start = self._period_start
-            near_sec = round(self._near_sec)
-            far_sec = round(self._far_sec)
-            total_sec = near_sec + far_sec
-            blink_count = self._blink_count
-            avg_blink_rate = round(
-                sum(self._blink_rate_samples) / len(self._blink_rate_samples), 2
-            ) if self._blink_rate_samples else 0.0
-            
-            avg_perclos = round(
-                sum(self._perclos_samples) / len(self._perclos_samples), 3
-            ) if self._perclos_samples else 0.0
-            
-            avg_composite_score = round(
-                sum(self._composite_score_samples) / len(self._composite_score_samples), 1
-            ) if self._composite_score_samples else 0.0
+            robots_to_flush = dict(self._robots)
+            self._robots.clear()
 
-            dominant_distance = "Dekat" if near_sec >= far_sec else "Jauh"
+        period_end = get_current_iso_time()
 
-            # Ambil health_status yang paling sering muncul
-            health_status = "Aman"
-            if self._health_statuses:
-                health_status = max(
-                    set(self._health_statuses),
-                    key=self._health_statuses.count
-                )
+        for robot_id, state in robots_to_flush.items():
+            avg_distance_cm = 0.0
+            if state["distance_count"] > 0:
+                avg_distance_cm = round(state["distance_sum_cm"] / state["distance_count"], 1)
 
-            # Deduplicate kondisi dan rekomendasi
-            eye_conditions = list(dict.fromkeys(self._eye_conditions))
-            recommendations = list(dict.fromkeys(self._recommendations))
+            longest_continuous_gaze_minutes = round(state["longest_continuous_gaze_sec"] / 60.0, 2)
 
-            near_percentage = round((near_sec / total_sec) * 100, 1) if total_sec > 0 else 0.0
+            summary = {
+                "robot_id": robot_id,
+                "period_start": state["period_start"],
+                "period_end": period_end,
+                "screen_duration_sec": round(state["screen_duration_sec"]),
+                "blink_count": state["blink_count"],
+                "incomplete_blink_count": state["incomplete_blink_count"],
+                "distance_below_50_cm_for_at_least_10_seconds": state["distance_below_50_cm_for_at_least_10_seconds"],
+                "distance_below_20_cm_detected": state["distance_below_20_cm_detected"],
+                "longest_continuous_gaze_minutes": longest_continuous_gaze_minutes,
+                "avg_distance_cm": avg_distance_cm
+            }
+            summary.update(state["policy_summary"])
 
-            period_end = get_current_iso_time()
+            logger.info(
+                f"[Aggregator] Summary robot={robot_id} | "
+                f"Screen={summary['screen_duration_sec']}s | Blink={summary['blink_count']} | IncompBlink={summary['incomplete_blink_count']}"
+            )
 
-        if robot_id is None:
-            logger.info("[Aggregator] Tidak ada data dalam window ini. Summary dilewati.")
-            self._reset_state()
-            return
-
-        summary = {
-            "robot_id": robot_id,
-            "period_start": period_start,
-            "period_end": period_end,
-            "near_duration_sec": near_sec,
-            "far_duration_sec": far_sec,
-            "near_percentage": near_percentage,
-            "blink_count": blink_count,
-            "avg_blink_rate": avg_blink_rate,
-            "avg_perclos": avg_perclos,
-            "avg_fatigue_score": avg_composite_score,
-            "dominant_distance": dominant_distance,
-            "health_status": health_status,
-            "eye_conditions": eye_conditions,
-            "recommendations": recommendations
-        }
-
-        logger.info(
-            f"[Aggregator] Summary robot={robot_id} | "
-            f"Dekat={near_sec}s | Jauh={far_sec}s | Blink={blink_count} | FatigueScore={avg_composite_score}"
-        )
-
-        # Panggil callback (emit ke BE)
-        try:
-            self._on_summary(summary)
-        except Exception as e:
-            logger.error(f"[Aggregator] Error saat memanggil on_summary callback: {e}")
-
-        # Reset untuk window berikutnya
-        self._reset_state()
+            try:
+                self._on_summary(summary)
+            except Exception as e:
+                logger.error(f"[Aggregator] Error saat memanggil on_summary callback: {e}")

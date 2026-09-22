@@ -215,36 +215,15 @@ if sock is not None:
         current_robot_id = None
         frame_counter = 0
         try:
-            # Kirim handshake response awal begitu terhubung
-            try:
-                ws.send("READY")
-                ws.send("OK")
-                ws.send("normal")
-                logger.info("Handshake 'READY', 'OK', dan trigger awal 'normal' berhasil dikirim ke ESP32-CAM.")
-            except Exception as e:
-                logger.warning(f"Gagal kirim handshake awal ke ESP32: {e}")
-
             while True:
                 message = ws.receive()
                 if message is None:
                     logger.info("ESP32-CAM ws.receive() returned None (closed).")
                     break
 
-                # Handle jika ESP32 mengirim pesan teks (misal ping / request start / auth)
+                # Firmware hanya mengirim frame dan sensor; command keluar lewat trigger service.
                 if isinstance(message, str):
                     logger.info(f"ESP32-CAM teks diterima: '{message}'")
-                    msg_lower = message.lower().strip()
-                    if "ping" in msg_lower:
-                        try:
-                            ws.send("pong")
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            ws.send("READY")
-                            ws.send("OK")
-                        except Exception:
-                            pass
                     continue
 
                 if not isinstance(message, (bytes, bytearray, memoryview)):
@@ -264,16 +243,12 @@ if sock is not None:
                 #   Byte N+2..  : JPEG frame bytes
                 decoded = decode_websocket_packet(packet, 16)
                 if decoded is not None:
-                    if len(decoded) == 3:
-                        robot_id, frame, is_dekat = decoded
-                    else:
-                        robot_id, frame = decoded
-                        is_dekat = False
+                    robot_id, frame, is_dekat, distance_cm = decoded
 
                     if not robot_id or robot_id == "UNKNOWN":
                         robot_id = "fadfa566"
                 else:
-                    robot_id, frame, is_dekat = None, None, False
+                    robot_id, frame, is_dekat, distance_cm = None, None, False, None
 
                 if frame is None or not robot_id:
                     logger.warning(f"ESP32-CAM frame decode gagal ({len(packet)} bytes)")
@@ -293,14 +268,22 @@ if sock is not None:
                 if frame_counter % 30 == 0:
                     logger.info(
                         f"ESP32-CAM streaming aktif: {frame_counter} frame "
-                        f"(robot_id={robot_id}, is_dekat={is_dekat}, size={packet_size_mb:.4f} MB, shape={frame.shape})"
+                        f"(robot_id={robot_id}, distance_cm={distance_cm}, is_dekat={is_dekat}, "
+                        f"size={packet_size_mb:.4f} MB, shape={frame.shape})"
                     )
 
-                distance_label = "Dekat" if is_dekat else "Jauh"
+                distance_label = (
+                    "Tidak diketahui" if distance_cm is None
+                    else ("Dekat" if distance_cm < 50.0 else "Jauh")
+                )
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,
                     frame=frame,
-                    distance_json={"distance": distance_label, "confidence": 95},
+                    distance_json={
+                        "distance": distance_label,
+                        "distance_cm": distance_cm,
+                        "is_dekat": is_dekat,
+                    },
                     frame_size_bytes=packet_size_bytes
                 )
         except Exception as error:

@@ -257,7 +257,7 @@ class VisionPipelineService:
                 self.aggregator.ingest(
                     robot_id=robot_id,
                     face_detected=face_detected,
-                    distance_cm=distance_numeric_cm,
+                    distance_cm=distance_cm,
                     blink_event=blink_event,
                     incomplete_blink=incomplete_blink,
                     policy_summary=hw_payload,

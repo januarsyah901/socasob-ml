@@ -613,8 +613,13 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   $('eye-status').textContent=d.eye_status||'N/A';
   const eb=$('ear-bar');eb.style.width=Math.min(100,ear/0.4*100)+'%';eb.style.background=(d.eye_status==='Closed')?'var(--color-error)':'var(--color-signal-blue)';
   // timers (cache per-robot agar pindah tab tidak reset angka)
-  workSec=hw.work_elapsed_sec??d.work_elapsed_sec??workSec;
+  const backendWorkSec = hw.work_elapsed_sec ?? d.work_elapsed_sec;
+  if (backendWorkSec != null && backendWorkSec > 0) {
+    workSec = Math.max(workSec, backendWorkSec);
+  }
   if(selRobot)workCache[selRobot]=workSec;
+  const h=Math.floor(workSec/3600),m=Math.floor(workSec%3600/60),s=workSec%60;
+  $('t-h').textContent=fmt2(h);$('t-m').textContent=fmt2(m);$('t-s').textContent=fmt2(s);$('t-total').textContent=h*60+m;
   const brs=hw.break_remaining_sec??d.break_remaining_sec??0;
   const fds=hw.fatigue_duration_sec??0;
   $('work-elapsed-time').textContent=fmtDur(workSec);

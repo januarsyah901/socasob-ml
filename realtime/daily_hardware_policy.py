@@ -176,6 +176,8 @@ class DailyHardwarePolicy:
                 or state["distance_below_20_cm_detected"]
                 or state["continuous_distance_below_20_sec"] > 1200.0
             ),
+            "work_elapsed_sec": int(state["screen_duration_sec"]),
+            "break_remaining_sec": 0,
             "previous_hardware_command": previous,
             "hardware_command_changed": previous != command,
             "last_update_timestamp": now,

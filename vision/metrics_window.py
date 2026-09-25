@@ -43,6 +43,9 @@ class MetricsWindow:
         self.closed_frame_log: Deque[Tuple[float, bool]] = deque()
         # Deque of (timestamp, is_valid)
         self.valid_frame_log: Deque[Tuple[float, bool]] = deque()
+        self._valid_timestamps: Deque[float] = deque()
+        self._session_start: Optional[float] = None
+        self._total_valid_blinks = 0
 
         self._smoothed_rate: Optional[float] = None
 
@@ -56,20 +59,28 @@ class MetricsWindow:
         self.blink_events.append(
             (event["timestamp"], event["duration"], incomplete)
         )
+        self._total_valid_blinks += 1
         self._trim()
 
     def add_frame(self, timestamp: float, is_closed: bool, is_valid: bool) -> None:
         """Catat status satu frame ke window."""
-        self.closed_frame_log.append((timestamp, is_closed))
         self.valid_frame_log.append((timestamp, is_valid))
+        if is_valid:
+            self.closed_frame_log.append((timestamp, is_closed))
+            self._valid_timestamps.append(timestamp)
+            if self._session_start is None:
+                self._session_start = timestamp
         self._trim()
 
     def _trim(self) -> None:
         """Buang entri yang sudah di luar window."""
-        cutoff = time.time() - self.window_seconds
+        reference = self.valid_frame_log[-1][0] if self.valid_frame_log else time.time()
+        cutoff = reference - self.window_seconds
         for log in (self.blink_events, self.closed_frame_log, self.valid_frame_log):
             while log and log[0][0] < cutoff:
                 log.popleft()
+        while self._valid_timestamps and self._valid_timestamps[0] < cutoff:
+            self._valid_timestamps.popleft()
 
     # ─────────────────────────────────────────
     # Metric calculations
@@ -85,8 +96,23 @@ class MetricsWindow:
     def raw_blink_rate_per_minute(self) -> float:
         """Blink rate mentah: jumlah kedipan / elapsed × 60."""
         n = len(self.blink_events)
-        elapsed = max(self.window_seconds, 1)
+        elapsed = self.valid_observation_time()
+        if elapsed <= 0:
+            return 0.0
         return (n / elapsed) * 60.0
+
+    def valid_observation_time(self) -> float:
+        """Durasi observasi valid dalam window, dalam detik."""
+        if len(self._valid_timestamps) < 2:
+            return 0.0
+        return min(self.window_seconds, self._valid_timestamps[-1] - self._valid_timestamps[0])
+
+    def is_warmed_up(self, timestamp: Optional[float] = None) -> bool:
+        """Risiko baru dievaluasi setelah 60 detik dan minimal 5 blink valid."""
+        if self._session_start is None:
+            return False
+        now = self._valid_timestamps[-1] if timestamp is None and self._valid_timestamps else timestamp
+        return now is not None and now - self._session_start >= 60.0 and self._total_valid_blinks >= 5
 
     def smoothed_blink_rate(self) -> float:
         """

@@ -15,7 +15,8 @@ Fitur utama:
 """
 
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from typing import Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -29,6 +30,27 @@ RIGHT_EYE_INDICES: List[int] = [362, 385, 387, 263, 373, 380]
 # Indeks ujung luar mata kiri & kanan — dipakai oleh DistanceEstimator
 LEFT_EYE_OUTER: int = 33
 RIGHT_EYE_OUTER: int = 263
+
+
+class EARSmoother:
+    """Smoothing EAR EMA dengan histori pendek untuk menekan noise landmark."""
+
+    def __init__(self, window_size: int = 5, alpha: float = 0.5):
+        self.values: Deque[float] = deque(maxlen=window_size)
+        self.alpha = alpha
+        self._value: Optional[float] = None
+
+    def update(self, ear_value: float) -> float:
+        self.values.append(float(ear_value))
+        if self._value is None:
+            self._value = float(ear_value)
+        else:
+            self._value = self.alpha * float(ear_value) + (1.0 - self.alpha) * self._value
+        return self._value
+
+    def reset(self) -> None:
+        self.values.clear()
+        self._value = None
 
 
 # ─────────────────────────────────────────────
@@ -111,20 +133,33 @@ class BlinkEventDetector:
 
     # Confidence minimum untuk memproses frame (Bagian 3: Data Quality Gating)
     MIN_CONFIDENCE: float = 0.5
+    EAR_CLOSE_THRESHOLD: float = 0.21
+    EAR_OPEN_THRESHOLD: float = 0.26
+    INCOMPLETE_EAR_THRESHOLD: float = 0.15
+    MIN_CLOSED_FRAMES: int = 3
+    BLINK_COOLDOWN_FRAMES: int = 5
 
     def __init__(
         self,
         ear_threshold: float = 0.21,
-        min_closed_frames: int = 2,
+        min_closed_frames: int = 3,
+        ear_open_threshold: float = 0.26,
+        smoothing_window: int = 5,
+        cooldown_frames: int = 5,
     ):
         """
         Args:
-            ear_threshold: Batas EAR di bawah mana mata dianggap tertutup.
+            ear_threshold: Batas EAR penutupan (dipertahankan untuk kompatibilitas).
             min_closed_frames: Jumlah frame berturut-turut di bawah threshold
                                sebelum state beralih ke CLOSED.
         """
         self.ear_threshold = ear_threshold
-        self.min_closed_frames = min_closed_frames
+        self.close_threshold = ear_threshold
+        self.open_threshold = ear_open_threshold
+        self.min_closed_frames = max(min_closed_frames, self.MIN_CLOSED_FRAMES)
+        self.cooldown_frames = cooldown_frames
+        self._cooldown_remaining = 0
+        self.smoother = EARSmoother(window_size=smoothing_window)
 
         self.state = EyeState.OPEN
         self._closed_frame_count: int = 0
@@ -150,51 +185,52 @@ class BlinkEventDetector:
                 {"duration": float, "timestamp": float, "incomplete": bool}
             None jika tidak ada event.
         """
-        # Data quality gate (Bagian 3)
+        # Data quality gate: frame buruk tidak mengubah state atau statistik.
         if face_confidence < self.MIN_CONFIDENCE:
             return None
 
-        if ear_value < self.ear_threshold:
-            # Track EAR minimum selama kedipan (untuk incomplete blink detection)
-            self._min_ear_during_blink = min(self._min_ear_during_blink, ear_value)
+        smoothed_ear = self.smoother.update(ear_value)
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            self.state = EyeState.OPEN
+            self._closed_frame_count = 0
+            return None
 
-            if self.state == EyeState.OPEN:
-                self.state = EyeState.CLOSING
-                self._blink_start_time = timestamp
-                self._closed_frame_count = 1
-                self._min_ear_during_blink = ear_value
-            elif self.state == EyeState.CLOSING:
+        if self.state == EyeState.OPEN and smoothed_ear < self.close_threshold:
+            self.state = EyeState.CLOSING
+            self._blink_start_time = timestamp
+            self._closed_frame_count = 1
+            self._min_ear_during_blink = smoothed_ear
+        elif self.state == EyeState.CLOSING:
+            if smoothed_ear > self.open_threshold:
+                self.state = EyeState.OPEN
+                self._closed_frame_count = 0
+                self._blink_start_time = None
+                self._min_ear_during_blink = 1.0
+            else:
                 self._closed_frame_count += 1
+                self._min_ear_during_blink = min(self._min_ear_during_blink, smoothed_ear)
                 if self._closed_frame_count >= self.min_closed_frames:
                     self.state = EyeState.CLOSED
-            # Jika sudah CLOSED, tetap di CLOSED selama EAR di bawah threshold
-
-        else:
-            if self.state in (EyeState.CLOSING, EyeState.CLOSED):
-                # Transisi kembali ke OPEN → emit blink event
+        elif self.state == EyeState.CLOSED:
+            # Track EAR minimum selama kedipan (untuk incomplete blink detection)
+            if smoothed_ear <= self.close_threshold:
+                self._min_ear_during_blink = min(self._min_ear_during_blink, smoothed_ear)
+            elif smoothed_ear > self.open_threshold:
                 start = self._blink_start_time if self._blink_start_time else timestamp
                 duration = timestamp - start
-
-                # Incomplete blink flag:
-                # Jika EAR minimum selama kedipan masih > 50% threshold,
-                # berarti mata tidak benar-benar tertutup sempurna.
-                # Secara klinis, ini lebih relevan terhadap risiko mata kering
-                # (tear film tidak terdistribusi sempurna).
-                incomplete = self._min_ear_during_blink > (self.ear_threshold * 0.5)
-
+                incomplete = self._min_ear_during_blink > self.INCOMPLETE_EAR_THRESHOLD
                 event = {
                     "duration": duration,
                     "timestamp": timestamp,
                     "incomplete": incomplete,
                     "min_ear": self._min_ear_during_blink,
                 }
-
                 self.state = EyeState.OPEN
                 self._closed_frame_count = 0
                 self._blink_start_time = None
                 self._min_ear_during_blink = 1.0
+                self._cooldown_remaining = self.cooldown_frames
                 return event
-
-            self.state = EyeState.OPEN
 
         return None

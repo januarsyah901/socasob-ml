@@ -114,7 +114,7 @@ def run_calibration(
     logger.info(f"[Kalibrasi] Memulai sesi kalibrasi {duration_sec} detik...")
     logger.info("[Kalibrasi] Duduk santai di depan kamera. Berkediplah secara alami.")
 
-    detector = BlinkEventDetector(ear_threshold=ear_threshold)
+    detector = BlinkEventDetector()
     blink_timestamps = []
     start = time.time()
 
@@ -212,28 +212,32 @@ def vision_pipeline_loop(
             # 3. Estimasi jarak
             distance_cm = distance_estimator.estimate(landmarks, w, h)
 
-        # 4. Update blink detector
-        is_closed = (avg_ear < blink_detector.ear_threshold) if face_detected else False
+        # 4. Update detector lalu catat PERCLOS dari state hasil smoothing.
         is_valid = face_confidence >= 0.5
-
-        metrics_window.add_frame(now, is_closed=is_closed, is_valid=is_valid)
-
         blink_event = blink_detector.update(avg_ear, face_confidence, now)
         if blink_event:
             metrics_window.add_blink(blink_event)
+        metrics_window.add_frame(
+            now,
+            is_closed=is_valid and blink_detector.state.value == "closed",
+            is_valid=is_valid,
+        )
 
         # 5. Update laporan screen time kumulatif.
         myopia_risk.tick(face_detected)
         risk_result = myopia_risk.get_risk()
 
         # 6. Policy ML menghasilkan command hardware sekaligus ringkasan risiko.
-        incomplete_blink = bool(blink_event and blink_event.get("incomplete", False))
+        risk_ready = metrics_window.is_warmed_up(now)
+        incomplete_blink = bool(risk_ready and blink_event and blink_event.get("incomplete", False))
         hw_policy_results = daily_policy.update(
             robot_id="local_robot",
             face_detected=face_detected,
             distance_cm=distance_cm,
-            blink_event=bool(blink_event),
+            blink_event=bool(risk_ready and blink_event),
             incomplete_blink=incomplete_blink,
+            risk_ready=risk_ready,
+            valid_observation_time=metrics_window.valid_observation_time(),
             now=now,
         )
 
@@ -303,7 +307,7 @@ def main() -> None:
     face_mesh = FaceMeshDetector()
 
     logger.info("[Init] Inisialisasi modul vision...")
-    blink_detector = BlinkEventDetector(ear_threshold=ear_threshold)
+    blink_detector = BlinkEventDetector()
     distance_estimator = DistanceEstimator(frame_width=frame_w)
     metrics_window = MetricsWindow(window_seconds=60)
 

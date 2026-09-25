@@ -40,7 +40,7 @@ class EyeConditionAnalyzer:
                  min_data_quality: float = 0.7,
                  baseline_rate: float = 17.0):
         
-        self.threshold = ear_threshold if ear_threshold is not None else getattr(settings, 'EAR_THRESHOLD', 0.23)
+        self.threshold = ear_threshold if ear_threshold is not None else 0.21
         self.baseline_rate = baseline_rate
         
         # Komponen scoring komposit
@@ -84,12 +84,8 @@ class EyeConditionAnalyzer:
             Tuple[bool, Dict[str, Any]]: (is_blink_event, metrics_dict)
         """
         is_valid = face_confidence >= 0.5
-        is_closed = (ear_value < self.detector.ear_threshold) if is_valid else False
 
-        # 1. Update sliding window frame log
-        self.window.add_frame(timestamp, is_closed=is_closed, is_valid=is_valid)
-
-        # 2. Update detector kedipan
+        # 1. Update detector; seluruh keputusan memakai EAR yang sudah dihaluskan.
         event = self.detector.update(ear_value, face_confidence, timestamp)
         blink_event = False
         incomplete_blink = False
@@ -99,10 +95,21 @@ class EyeConditionAnalyzer:
             self.lifetime_blinks += 1
             self.window.add_blink(event)
 
-        # 3. Evaluasi klasifikasi fatigue
-        candidate_status, stable_status, detail = self.classifier.evaluate(
-            self.window, baseline_rate=self.baseline_rate
+        # 2. Catat PERCLOS hanya dari frame valid dan state detector.
+        self.window.add_frame(
+            timestamp,
+            is_closed=is_valid and self.detector.state == EyeState.CLOSED,
+            is_valid=is_valid,
         )
+
+        # 3. Risiko ditahan selama startup warm-up.
+        warmup_complete = self.window.is_warmed_up(timestamp)
+        if warmup_complete:
+            candidate_status, stable_status, detail = self.classifier.evaluate(
+                self.window, baseline_rate=self.baseline_rate
+            )
+        else:
+            candidate_status, stable_status, detail = SystemStatus.NO_DATA, SystemStatus.NO_DATA, None
 
         # 4. Petakan stable_status ke health_status, conditions, dan recommendations
         status_str, conditions, recommendations = self._map_status_details(stable_status, detail)
@@ -111,6 +118,7 @@ class EyeConditionAnalyzer:
             "eye_state": self.detector.state.value,
             "blink_event": blink_event,
             "incomplete": incomplete_blink,
+            "incomplete_blink_ratio": round(self.window.incomplete_blink_ratio(), 3),
             "blink_count": len(self.window.blink_events),
             "lifetime_blinks": self.lifetime_blinks,
             "raw_blink_rate": round(self.window.raw_blink_rate_per_minute(), 2),
@@ -120,6 +128,7 @@ class EyeConditionAnalyzer:
             "interval_variability": round(detail["interval_variability"], 3) if detail else round(self.window.interval_variability(), 3),
             "composite_score": round(detail["composite_score"], 1) if detail else 0.0,
             "data_quality": round(self.window.data_quality(), 2),
+            "warmup_complete": warmup_complete,
             "candidate_status": candidate_status.value,
             "system_status": stable_status.value,
             "health_status": status_str,

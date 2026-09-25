@@ -41,6 +41,8 @@ class DailyHardwarePolicy:
         distance_cm: Optional[float],
         blink_event: bool,
         incomplete_blink: bool,
+        risk_ready: bool = True,
+        valid_observation_time: Optional[float] = None,
         now: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Accumulate one observation and return the prioritized final command."""
@@ -71,7 +73,7 @@ class DailyHardwarePolicy:
             state["continuous_distance_below_50_sec"] = 0.0
             state["continuous_distance_below_20_sec"] = 0.0
 
-        if blink_event:
+        if risk_ready and blink_event:
             state["total_blinks"] += 1
             state["incomplete_blinks"] += int(incomplete_blink)
             state["blink_events"].append((now, bool(incomplete_blink)))
@@ -79,9 +81,15 @@ class DailyHardwarePolicy:
         while state["blink_events"] and state["blink_events"][0][0] < cutoff:
             state["blink_events"].popleft()
 
-        return self._evaluate(state, now)
+        return self._evaluate(state, now, valid_observation_time, risk_ready)
 
-    def _evaluate(self, state: Dict[str, Any], now: float) -> Dict[str, Any]:
+    def _evaluate(
+        self,
+        state: Dict[str, Any],
+        now: float,
+        valid_observation_time: Optional[float] = None,
+        risk_ready: bool = True,
+    ) -> Dict[str, Any]:
         screen_minutes = state["screen_duration_sec"] / 60.0
         fatigue_active = (
             screen_minutes > 360.0
@@ -97,7 +105,7 @@ class DailyHardwarePolicy:
         total_window = len(events)
         incomplete_window = sum(1 for _, incomplete in events if incomplete)
         window_start = events[0][0] if events else now
-        valid_window_seconds = min(60.0, max(0.0, now - window_start))
+        valid_window_seconds = valid_observation_time or min(60.0, max(0.0, now - window_start))
         blink_rate = (
             total_window / valid_window_seconds * 60.0
             if valid_window_seconds > 0 else 0.0
@@ -105,7 +113,7 @@ class DailyHardwarePolicy:
         incomplete_ratio = (
             incomplete_window / total_window if total_window >= 5 else 0.0
         )
-        dry_active = (
+        dry_active = risk_ready and (
             screen_minutes > 360.0
             or (total_window >= 5 and incomplete_ratio >= 0.40)
             or (total_window >= 5 and valid_window_seconds >= 60.0 and blink_rate <= 10.0)

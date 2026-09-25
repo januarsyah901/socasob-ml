@@ -112,6 +112,18 @@ class RuleBasedFatigueDetector:
             Dict dengan: type, status, composite_score, detail, recommendation, timestamp.
         """
         metrics: MetricsWindow = features["metrics_window"]
+        if not metrics.is_warmed_up():
+            return {
+                "type": "fatigue",
+                "status": "No Data",
+                "candidate_status": "No Data",
+                "composite_score": 0.0,
+                "data_quality": round(metrics.data_quality(), 2),
+                "detail": None,
+                "recommendation": "Data belum cukup untuk evaluasi.",
+                "label": "No Data",
+                "timestamp": time.time(),
+            }
         candidate, stable, detail = self.classifier.evaluate(
             metrics, baseline_rate=self.baseline_rate,
         )
@@ -159,7 +171,7 @@ class RuleBasedDryEyeDetector:
         metrics: MetricsWindow = features["metrics_window"]
 
         quality = metrics.data_quality()
-        if quality < 0.70:
+        if quality < 0.70 or not metrics.is_warmed_up():
             return {
                 "type": "dry_eye",
                 "status": "No Data",

@@ -29,7 +29,7 @@ from scoring.myopia_risk import MyopiaRiskEstimator
 from config import settings
 
 
-def run_evaluation(source_type: str = "webcam", video_path: str = None, duration_seconds: int = 300, ear_threshold: float = 0.22):
+def run_evaluation(source_type: str = "webcam", video_path: str = None, duration_seconds: int = 300, ear_threshold: float = 0.21):
     minutes = duration_seconds / 60.0
     print("=" * 65)
     print(f"  SOCACOMVI — EVALUASI KINERJA AI DATA ASLI ({minutes:.1f} MENIT)")
@@ -48,7 +48,7 @@ def run_evaluation(source_type: str = "webcam", video_path: str = None, duration
         return
 
     face_mesh = FaceMeshDetector()
-    blink_detector = BlinkEventDetector(ear_threshold=ear_threshold)
+    blink_detector = BlinkEventDetector()
     metrics_window = MetricsWindow(window_seconds=60)
     myopia_guard = ActiveMyopiaGuard()
     myopia_risk = MyopiaRiskEstimator()
@@ -89,23 +89,26 @@ def run_evaluation(source_type: str = "webcam", video_path: str = None, duration
             ear_r = calculate_ear(right_eye)
             avg_ear = (ear_l + ear_r) / 2.0
 
-        is_closed = (avg_ear < ear_threshold) if landmarks is not None else False
         ear_history.append(avg_ear)
-        closed_history.append(1 if is_closed else 0)
-
-        # Feed MetricsWindow with actual wall-clock timestamp now
-        metrics_window.add_frame(now, is_closed=is_closed, is_valid=(face_confidence >= 0.5))
         blink_event = blink_detector.update(avg_ear, face_confidence, now)
         if blink_event:
             detected_blinks += 1
             blink_timestamps.append(elapsed)
             # Convert BlinkEvent object to dictionary if needed
             event_dict = {
-                "timestamp": getattr(blink_event, "timestamp", now),
-                "duration": getattr(blink_event, "duration", 0.2),
-                "incomplete": getattr(blink_event, "incomplete", False)
+                "timestamp": blink_event.get("timestamp", now),
+                "duration": blink_event.get("duration", 0.2),
+                "incomplete": blink_event.get("incomplete", False),
             }
             metrics_window.add_blink(event_dict)
+
+        is_closed = landmarks is not None and blink_detector.state.value == "closed"
+        closed_history.append(1 if is_closed else 0)
+        metrics_window.add_frame(
+            now,
+            is_closed=is_closed,
+            is_valid=(face_confidence >= 0.5),
+        )
 
         # Run Engine to calculate real PERCLOS & composite fatigue score
         guard_res = myopia_guard.update(landmarks is not None, None, now)

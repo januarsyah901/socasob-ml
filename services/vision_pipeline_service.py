@@ -49,7 +49,7 @@ class VisionPipelineService:
         # Inisialisasi modul-modul CV
         self.face_mesh = FaceMeshDetector()
         self.eye_analyzer = EyeConditionAnalyzer(
-            ear_threshold=getattr(settings, 'EAR_THRESHOLD', 0.23),
+            ear_threshold=0.21,
             window_seconds=60,
             required_consecutive=3,
             min_data_quality=0.7,
@@ -137,7 +137,7 @@ class VisionPipelineService:
                     ear_left = calculate_ear(left_eye)
                     ear_right = calculate_ear(right_eye)
                     avg_ear = (ear_left + ear_right) / 2.0
-                    eye_status = "Closed" if avg_ear < self.eye_analyzer.detector.ear_threshold else "Open"
+                    eye_status = "Unknown"
                     estimated_distance_cm = self.distance_estimator.estimate(landmarks, w, h)
 
                 # Prioritas distance_cm: dari sensor robot jika ada, atau estimasi CV vision
@@ -160,13 +160,17 @@ class VisionPipelineService:
                     face_confidence=face_confidence,
                     timestamp=current_time
                 )
+                smoothed_ear = self.eye_analyzer.detector.smoother._value or avg_ear
+                eye_status = (
+                    "Closed" if self.eye_analyzer.detector.state.value == "closed" else "Open"
+                ) if face_detected else "Unknown"
 
                 # 3. Ekstraksi Payload Fitur Terstandar
                 features = self.feature_extractor.build_payload(
                     face_detected=face_detected,
                     timestamp=iso_time,
                     fps=fps,
-                    ear=round(avg_ear, 3) if face_detected else 0.0,
+                    ear=round(smoothed_ear, 3) if face_detected else 0.0,
                     eye_status=eye_status,
                     blink_count=metrics_dict["blink_count"],
                     lifetime_blinks=metrics_dict["lifetime_blinks"],
@@ -182,13 +186,16 @@ class VisionPipelineService:
                 )
 
                 # 4. ML policy adalah satu-satunya pembuat command hardware.
-                incomplete_blink = blink_event and metrics_dict.get("incomplete", False)
+                risk_ready = metrics_dict.get("warmup_complete", False)
+                incomplete_blink = bool(risk_ready and blink_event and metrics_dict.get("incomplete", False))
                 hw_policy_results = self.daily_policy.update(
                     robot_id=robot_id,
                     face_detected=face_detected,
                     distance_cm=distance_cm,
-                    blink_event=blink_event,
-                    incomplete_blink=incomplete_blink
+                    blink_event=bool(risk_ready and blink_event),
+                    incomplete_blink=incomplete_blink,
+                    risk_ready=risk_ready,
+                    valid_observation_time=self.eye_analyzer.window.valid_observation_time(),
                 )
                 hw_payload = hw_policy_results
                 trigger_text = hw_payload["hardware_command"]
@@ -258,7 +265,7 @@ class VisionPipelineService:
                     robot_id=robot_id,
                     face_detected=face_detected,
                     distance_cm=distance_cm,
-                    blink_event=blink_event,
+                    blink_event=bool(risk_ready and blink_event),
                     incomplete_blink=incomplete_blink,
                     policy_summary=hw_payload,
                 )
@@ -345,7 +352,9 @@ class VisionPipelineService:
         """
         with self.lock:
             if hasattr(self, 'eye_analyzer') and self.eye_analyzer:
-                self.eye_analyzer.ear_threshold = threshold
+                self.eye_analyzer.threshold = threshold
+                self.eye_analyzer.detector.ear_threshold = threshold
+                self.eye_analyzer.detector.close_threshold = threshold
                 return 1
             return 0
 

@@ -13,6 +13,7 @@ import numpy as np
 from collections import deque
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple
+from vision.blink_detector import EARSmoother
 
 
 class EyeState(Enum):
@@ -38,10 +39,14 @@ class BlinkEventDetector:
     Frame dengan confidence landmark rendah diabaikan (bukan dianggap "tidak berkedip").
     """
 
-    def __init__(self, ear_threshold=0.21, min_closed_frames=2, fps=30, incomplete_ear_threshold=0.15):
+    def __init__(self, ear_threshold=0.21, min_closed_frames=3, fps=15, incomplete_ear_threshold=0.15):
         self.ear_threshold = ear_threshold
+        self.open_threshold = 0.26
         self.incomplete_ear_threshold = incomplete_ear_threshold
-        self.min_closed_frames = min_closed_frames
+        self.min_closed_frames = max(min_closed_frames, 3)
+        self.cooldown_frames = 5
+        self.cooldown_remaining = 0
+        self.smoother = EARSmoother(window_size=5)
         self.fps = fps
 
         self.state = EyeState.OPEN
@@ -56,27 +61,37 @@ class BlinkEventDetector:
         if face_confidence < 0.5:
             return None  # data quality gate: jangan proses frame yang tidak andal
 
-        if ear_value < self.ear_threshold:
-            if self.state == EyeState.OPEN:
-                self.state = EyeState.CLOSING
-                self.blink_start_time = timestamp
-                self.closed_frame_count = 1
-                self.current_blink_min_ear = ear_value
-            elif self.state == EyeState.CLOSING:
+        smoothed_ear = self.smoother.update(ear_value)
+        if self.cooldown_remaining > 0:
+            self.cooldown_remaining -= 1
+            self.state = EyeState.OPEN
+            self.closed_frame_count = 0
+            return None
+
+        if self.state == EyeState.OPEN and smoothed_ear < self.ear_threshold:
+            self.state = EyeState.CLOSING
+            self.blink_start_time = timestamp
+            self.closed_frame_count = 1
+            self.current_blink_min_ear = smoothed_ear
+        elif self.state == EyeState.CLOSING:
+            if smoothed_ear > self.open_threshold:
+                self.state = EyeState.OPEN
+                self.closed_frame_count = 0
+                self.blink_start_time = None
+                self.current_blink_min_ear = float('inf')
+            else:
                 self.closed_frame_count += 1
-                if ear_value < self.current_blink_min_ear:
-                    self.current_blink_min_ear = ear_value
+                self.current_blink_min_ear = min(self.current_blink_min_ear, smoothed_ear)
                 if self.closed_frame_count >= self.min_closed_frames:
                     self.state = EyeState.CLOSED
-            elif self.state == EyeState.CLOSED:
-                if ear_value < self.current_blink_min_ear:
-                    self.current_blink_min_ear = ear_value
-        else:
-            if self.state in (EyeState.CLOSING, EyeState.CLOSED):
+        elif self.state == EyeState.CLOSED:
+            if smoothed_ear <= self.ear_threshold:
+                self.current_blink_min_ear = min(self.current_blink_min_ear, smoothed_ear)
+            elif smoothed_ear > self.open_threshold:
                 duration = timestamp - (self.blink_start_time if self.blink_start_time else timestamp)
                 incomplete = self.current_blink_min_ear > self.incomplete_ear_threshold
                 event = {
-                    "duration": duration, 
+                    "duration": duration,
                     "timestamp": timestamp,
                     "min_ear": self.current_blink_min_ear,
                     "incomplete": incomplete
@@ -85,8 +100,8 @@ class BlinkEventDetector:
                 self.closed_frame_count = 0
                 self.blink_start_time = None
                 self.current_blink_min_ear = float('inf')
+                self.cooldown_remaining = self.cooldown_frames
                 return event
-            self.state = EyeState.OPEN
 
         return None
 
@@ -104,26 +119,37 @@ class MetricsWindow:
         self.window_seconds = window_seconds
         self.smoothing_alpha = smoothing_alpha
 
-        self.blink_events = deque()      # (timestamp, duration)
+        self.blink_events = deque()      # (timestamp, duration, incomplete)
         self.closed_frame_log = deque()  # (timestamp, is_closed)
         self.valid_frame_log = deque()   # (timestamp, is_valid)
+        self._valid_timestamps = deque()
+        self._session_start = None
+        self._total_valid_blinks = 0
 
         self._smoothed_rate = None
 
     def add_blink(self, event: Dict[str, float]):
-        self.blink_events.append((event["timestamp"], event["duration"]))
+        self.blink_events.append((event["timestamp"], event["duration"], bool(event.get("incomplete", False))))
+        self._total_valid_blinks += 1
         self._trim()
 
     def add_frame(self, timestamp: float, is_closed: bool, is_valid: bool):
-        self.closed_frame_log.append((timestamp, is_closed))
         self.valid_frame_log.append((timestamp, is_valid))
+        if is_valid:
+            self.closed_frame_log.append((timestamp, is_closed))
+            self._valid_timestamps.append(timestamp)
+            if self._session_start is None:
+                self._session_start = timestamp
         self._trim()
 
     def _trim(self):
-        cutoff = time.time() - self.window_seconds
+        reference = self.valid_frame_log[-1][0] if self.valid_frame_log else time.time()
+        cutoff = reference - self.window_seconds
         for log in (self.blink_events, self.closed_frame_log, self.valid_frame_log):
             while log and log[0][0] < cutoff:
                 log.popleft()
+        while self._valid_timestamps and self._valid_timestamps[0] < cutoff:
+            self._valid_timestamps.popleft()
 
     def data_quality(self) -> float:
         """Proporsi frame valid (landmark terdeteksi baik) dalam window."""
@@ -134,8 +160,21 @@ class MetricsWindow:
 
     def raw_blink_rate_per_minute(self) -> float:
         n = len(self.blink_events)
-        elapsed = max(self.window_seconds, 1)
+        elapsed = self.valid_observation_time()
+        if elapsed <= 0:
+            return 0.0
         return (n / elapsed) * 60.0
+
+    def valid_observation_time(self) -> float:
+        if len(self._valid_timestamps) < 2:
+            return 0.0
+        return min(self.window_seconds, self._valid_timestamps[-1] - self._valid_timestamps[0])
+
+    def is_warmed_up(self, timestamp: Optional[float] = None) -> bool:
+        if self._session_start is None:
+            return False
+        now = self._valid_timestamps[-1] if timestamp is None and self._valid_timestamps else timestamp
+        return now is not None and now - self._session_start >= 60.0 and self._total_valid_blinks >= 5
 
     def smoothed_blink_rate(self) -> float:
         raw = self.raw_blink_rate_per_minute()
@@ -156,12 +195,12 @@ class MetricsWindow:
     def avg_blink_duration(self) -> float:
         if not self.blink_events:
             return 0.0
-        durations = [d for _, d in self.blink_events]
+        durations = [d for _, d, _ in self.blink_events]
         return float(np.mean(durations))
 
     def interval_variability(self) -> float:
         """Coefficient of variation dari interval antar-kedipan (std/mean)."""
-        timestamps = [t for t, _ in self.blink_events]
+        timestamps = [t for t, _, _ in self.blink_events]
         if len(timestamps) < 3:
             return 0.0
         intervals = np.diff(timestamps)
@@ -169,6 +208,12 @@ class MetricsWindow:
         if mean_iv == 0:
             return 0.0
         return float(np.std(intervals) / mean_iv)
+
+    def incomplete_blink_ratio(self) -> float:
+        if not self.blink_events:
+            return 0.0
+        incomplete = sum(1 for _, _, is_incomplete in self.blink_events if is_incomplete)
+        return incomplete / len(self.blink_events)
 
 
 # ---------------------------------------------------------------------

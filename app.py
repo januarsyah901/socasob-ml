@@ -274,7 +274,7 @@ if sock is not None:
 
                 distance_label = (
                     "Tidak diketahui" if distance_cm is None
-                    else ("Dekat" if distance_cm < 50.0 else "Jauh")
+                    else ("Dekat" if distance_cm < 30.0 else "Jauh")
                 )
                 robot_ws_handler.on_frame_array(
                     robot_id=robot_id,

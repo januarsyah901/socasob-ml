@@ -63,6 +63,25 @@ def test_continuous_gaze_over_twenty_minutes_is_20():
     assert result["hardware_command"] == "20"
 
 
+def test_break_requires_twenty_seconds_without_face():
+    policy = DailyHardwarePolicy()
+    policy.update("r1", True, 100.0, False, False, now=0.0)
+    result = policy.update("r1", True, 100.0, False, False, now=1201.0)
+    assert result["hardware_command"] == "20"
+
+    still_facing = policy.update("r1", True, 100.0, False, False, now=1210.0)
+    assert still_facing["hardware_command"] == "20"
+    assert still_facing["break_remaining_sec"] == 0.0
+
+    incomplete_break = policy.update("r1", False, None, False, False, now=1215.0)
+    assert incomplete_break["hardware_command"] == "20"
+    assert incomplete_break["break_remaining_sec"] == 20.0
+
+    completed_break = policy.update("r1", False, None, False, False, now=1235.0)
+    assert completed_break["hardware_command"] == "normal"
+    assert completed_break["break_remaining_sec"] == 0.0
+
+
 def test_dry_eye_wins_over_fatigue():
     policy = DailyHardwarePolicy()
     policy.update("r1", True, 40.0, False, False, now=0.0)

@@ -27,6 +27,8 @@ class DailyHardwarePolicy:
                 "incomplete_blinks": 0,
                 "blink_events": deque(),
                 "fatigue_start_time": None,
+                "break_active": False,
+                "break_start_time": None,
                 "last_update_time": None,
                 "last_risk_status": "normal",
                 "distance_cm": None,
@@ -55,9 +57,11 @@ class DailyHardwarePolicy:
 
         if face_detected:
             state["screen_duration_sec"] += delta
-            state["continuous_gaze_sec"] += delta
+            if not state["break_active"]:
+                state["continuous_gaze_sec"] += delta
         else:
-            state["continuous_gaze_sec"] = 0.0
+            if not state["break_active"]:
+                state["continuous_gaze_sec"] = 0.0
 
         if face_detected and distance_cm is not None:
             if distance_cm < 50.0:
@@ -73,7 +77,7 @@ class DailyHardwarePolicy:
             state["continuous_distance_below_50_sec"] = 0.0
             state["continuous_distance_below_20_sec"] = 0.0
 
-        if risk_ready and blink_event:
+        if risk_ready and blink_event and not state["break_active"]:
             state["total_blinks"] += 1
             state["incomplete_blinks"] += int(incomplete_blink)
             state["blink_events"].append((now, bool(incomplete_blink)))
@@ -81,7 +85,7 @@ class DailyHardwarePolicy:
         while state["blink_events"] and state["blink_events"][0][0] < cutoff:
             state["blink_events"].popleft()
 
-        return self._evaluate(state, now, valid_observation_time, risk_ready)
+        return self._evaluate(state, now, valid_observation_time, risk_ready, face_detected)
 
     def _evaluate(
         self,
@@ -89,7 +93,31 @@ class DailyHardwarePolicy:
         now: float,
         valid_observation_time: Optional[float] = None,
         risk_ready: bool = True,
+        face_detected: bool = False,
     ) -> Dict[str, Any]:
+        if (
+            risk_ready
+            and not state["break_active"]
+            and state["continuous_gaze_sec"] >= 1200.0
+        ):
+            state["break_active"] = True
+            state["break_start_time"] = None
+
+        break_remaining = 0.0
+        if state["break_active"]:
+            if face_detected:
+                state["break_start_time"] = None
+            else:
+                if state["break_start_time"] is None:
+                    state["break_start_time"] = now
+                elapsed_break = now - state["break_start_time"]
+                break_remaining = max(0.0, 20.0 - elapsed_break)
+                if elapsed_break >= 20.0:
+                    state["break_active"] = False
+                    state["break_start_time"] = None
+                    state["continuous_gaze_sec"] = 0.0
+                    break_remaining = 0.0
+
         screen_minutes = state["screen_duration_sec"] / 60.0
         fatigue_active = risk_ready and (
             screen_minutes > 360.0
@@ -124,7 +152,9 @@ class DailyHardwarePolicy:
             and now - state["fatigue_start_time"] >= 600.0
         )
 
-        if not risk_ready:
+        if state["break_active"]:
+            command = "20"
+        elif not risk_ready:
             command = "normal"
         elif state["continuous_gaze_sec"] > 1200.0:
             command = "20"
@@ -146,6 +176,7 @@ class DailyHardwarePolicy:
             fatigue_active=fatigue_active,
             dry_active=dry_active,
             risk_ready=risk_ready,
+            break_remaining=break_remaining,
             now=now,
         )
 
@@ -159,6 +190,7 @@ class DailyHardwarePolicy:
         fatigue_active: bool,
         dry_active: bool,
         risk_ready: bool,
+        break_remaining: float,
         now: float,
     ) -> Dict[str, Any]:
         previous = state["last_risk_status"]
@@ -189,7 +221,7 @@ class DailyHardwarePolicy:
                 or state["continuous_distance_below_20_sec"] > 1200.0
             ),
             "work_elapsed_sec": int(state["screen_duration_sec"]),
-            "break_remaining_sec": 0,
+            "break_remaining_sec": round(break_remaining, 1),
             "previous_hardware_command": previous,
             "hardware_command_changed": previous != command,
             "last_update_timestamp": now,

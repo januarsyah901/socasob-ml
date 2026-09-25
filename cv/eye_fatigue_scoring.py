@@ -13,7 +13,6 @@ import numpy as np
 from collections import deque
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple
-from vision.blink_detector import EARSmoother
 from config import settings
 
 
@@ -40,14 +39,10 @@ class BlinkEventDetector:
     Frame dengan confidence landmark rendah diabaikan (bukan dianggap "tidak berkedip").
     """
 
-    def __init__(self, ear_threshold=0.21, min_closed_frames=3, fps=15, incomplete_ear_threshold=0.15):
+    def __init__(self, ear_threshold=0.21, min_closed_frames=2, fps=30, incomplete_ear_threshold=0.15):
         self.ear_threshold = ear_threshold
-        self.open_threshold = 0.26
         self.incomplete_ear_threshold = incomplete_ear_threshold
-        self.min_closed_frames = max(min_closed_frames, 3)
-        self.cooldown_frames = 5
-        self.cooldown_remaining = 0
-        self.smoother = EARSmoother(window_size=3)
+        self.min_closed_frames = min_closed_frames
         self.fps = fps
 
         self.state = EyeState.OPEN
@@ -62,47 +57,31 @@ class BlinkEventDetector:
         if face_confidence < 0.5:
             return None  # data quality gate: jangan proses frame yang tidak andal
 
-        smoothed_ear = self.smoother.update(ear_value)
-        if self.cooldown_remaining > 0:
-            self.cooldown_remaining -= 1
-            self.state = EyeState.OPEN
-            self.closed_frame_count = 0
-            return None
-
-        if self.state == EyeState.OPEN and smoothed_ear < self.ear_threshold:
-            self.state = EyeState.CLOSING
-            self.blink_start_time = timestamp
-            self.closed_frame_count = 1
-            self.current_blink_min_ear = smoothed_ear
-        elif self.state == EyeState.CLOSING:
-            if smoothed_ear > self.open_threshold:
-                self.state = EyeState.OPEN
-                self.closed_frame_count = 0
-                self.blink_start_time = None
-                self.current_blink_min_ear = float('inf')
-            else:
+        if ear_value < self.ear_threshold:
+            self.current_blink_min_ear = min(self.current_blink_min_ear, ear_value)
+            if self.state == EyeState.OPEN:
+                self.state = EyeState.CLOSING
+                self.blink_start_time = timestamp
+                self.closed_frame_count = 1
+                self.current_blink_min_ear = ear_value
+            elif self.state == EyeState.CLOSING:
                 self.closed_frame_count += 1
-                self.current_blink_min_ear = min(self.current_blink_min_ear, smoothed_ear)
                 if self.closed_frame_count >= self.min_closed_frames:
                     self.state = EyeState.CLOSED
-        elif self.state == EyeState.CLOSED:
-            if smoothed_ear <= self.ear_threshold:
-                self.current_blink_min_ear = min(self.current_blink_min_ear, smoothed_ear)
-            elif smoothed_ear > self.open_threshold:
-                duration = timestamp - (self.blink_start_time if self.blink_start_time else timestamp)
-                incomplete = self.current_blink_min_ear > self.incomplete_ear_threshold
-                event = {
-                    "duration": duration,
-                    "timestamp": timestamp,
-                    "min_ear": self.current_blink_min_ear,
-                    "incomplete": incomplete
-                }
-                self.state = EyeState.OPEN
-                self.closed_frame_count = 0
-                self.blink_start_time = None
-                self.current_blink_min_ear = float('inf')
-                self.cooldown_remaining = self.cooldown_frames
-                return event
+        elif self.state in (EyeState.CLOSING, EyeState.CLOSED):
+            duration = timestamp - (self.blink_start_time if self.blink_start_time else timestamp)
+            incomplete = self.current_blink_min_ear > self.incomplete_ear_threshold
+            event = {
+                "duration": duration,
+                "timestamp": timestamp,
+                "min_ear": self.current_blink_min_ear,
+                "incomplete": incomplete
+            }
+            self.state = EyeState.OPEN
+            self.closed_frame_count = 0
+            self.blink_start_time = None
+            self.current_blink_min_ear = float('inf')
+            return event
 
         return None
 

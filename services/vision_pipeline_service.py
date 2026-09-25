@@ -162,7 +162,7 @@ class VisionPipelineService:
                     face_confidence=face_confidence,
                     timestamp=current_time
                 )
-                smoothed_ear = self.eye_analyzer.detector.smoother._value or avg_ear
+                smoothed_ear = avg_ear
                 eye_status = (
                     "Closed" if self.eye_analyzer.detector.state.value == "closed" else "Open"
                 ) if face_detected else "Unknown"

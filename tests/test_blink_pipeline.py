@@ -17,7 +17,6 @@ def test_open_eye_noise_does_not_emit_repeated_blinks():
 
 def test_three_to_five_closed_frames_emit_one_valid_blink():
     detector = BlinkEventDetector()
-    assert detector.smoother.values.maxlen == 3
     ear_values = [0.27] * 5 + [0.20, 0.19, 0.20, 0.21] + [0.27] * 12
 
     events = [
@@ -34,7 +33,6 @@ def test_invalid_landmark_frame_does_not_change_detector():
     detector.update(0.19, face_confidence=0.0, timestamp=0.0)
 
     assert detector.state.value == "open"
-    assert detector.smoother._value is None
 
 
 def test_metrics_rate_and_incomplete_ratio_use_valid_events():

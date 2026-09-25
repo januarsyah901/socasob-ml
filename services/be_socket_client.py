@@ -90,7 +90,7 @@ class BackendSocketClient:
     # ------------------------------------------------------------------
 
     def emit_realtime(self, robot_id: str, distance: str, confidence: int,
-                      blink_event: bool, timestamp: str) -> None:
+                      blink_event: bool, timestamp: str, distance_cm: float | None = None) -> None:
         """
         CHANNEL A — Kirim data real-time tiap frame ke BE.
         Event: py-eye-detection
@@ -101,6 +101,7 @@ class BackendSocketClient:
             confidence (int): Tingkat keyakinan (0-100).
             blink_event (bool): True jika frame ini mendeteksi satu kedipan penuh.
             timestamp (str): Waktu deteksi dalam format ISO 8601.
+            distance_cm (float, optional): Jarak numerik dalam cm.
         """
         if not self._connected:
             return
@@ -108,6 +109,7 @@ class BackendSocketClient:
         payload = {
             "robot_id": robot_id,
             "distance": distance,
+            "distance_cm": distance_cm,
             "confidence": confidence,
             "blink_event": blink_event,
             "timestamp": timestamp

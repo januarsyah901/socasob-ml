@@ -259,7 +259,8 @@ class VisionPipelineService:
                     distance=distance,
                     confidence=confidence,
                     blink_event=blink_event,
-                    timestamp=iso_time
+                    timestamp=iso_time,
+                    distance_cm=distance_cm
                 )
 
                 # 8. Kirim data ke AggregatorService untuk Channel B (1 menit)

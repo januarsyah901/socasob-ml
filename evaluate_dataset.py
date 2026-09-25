@@ -79,7 +79,8 @@ def run_evaluation(source_type: str = "webcam", video_path: str = None, duration
         elapsed = now - start_time
         h, w = frame.shape[:2]
 
-        landmarks = face_mesh.process(frame)
+        frame = face_mesh.preprocess_frame(frame)
+        landmarks = face_mesh.process_preprocessed(frame)
         face_confidence = 1.0 if landmarks is not None else 0.0
         avg_ear = 0.0
 

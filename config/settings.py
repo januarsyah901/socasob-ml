@@ -34,6 +34,9 @@ WEBCAM_INDEX = int(os.getenv("WEBCAM_INDEX", 0))
 # ==========================================
 # Computer Vision / Eye Health Parameters
 # ==========================================
+ROTATION_ANGLE = int(os.getenv("ROTATION_ANGLE", "90"))
+RISK_WARMUP_SECONDS = int(os.getenv("RISK_WARMUP_SECONDS", "300"))
+
 # Threshold untuk Eye Aspect Ratio (EAR) yang dianggap "mata tertutup"
 EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", 0.23))
 
@@ -50,4 +53,4 @@ BE_URL = os.getenv("BE_URL", "http://localhost:3001")
 # ==========================================
 # Logging Configuration
 # ==========================================
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

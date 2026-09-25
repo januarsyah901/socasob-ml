@@ -91,7 +91,7 @@ class DailyHardwarePolicy:
         risk_ready: bool = True,
     ) -> Dict[str, Any]:
         screen_minutes = state["screen_duration_sec"] / 60.0
-        fatigue_active = (
+        fatigue_active = risk_ready and (
             screen_minutes > 360.0
             or state["continuous_distance_below_50_sec"] >= 10.0
         )
@@ -124,7 +124,9 @@ class DailyHardwarePolicy:
             and now - state["fatigue_start_time"] >= 600.0
         )
 
-        if state["continuous_gaze_sec"] > 1200.0:
+        if not risk_ready:
+            command = "normal"
+        elif state["continuous_gaze_sec"] > 1200.0:
             command = "20"
         elif dry_active:
             command = "dry"
@@ -143,6 +145,7 @@ class DailyHardwarePolicy:
             incomplete_ratio=incomplete_ratio,
             fatigue_active=fatigue_active,
             dry_active=dry_active,
+            risk_ready=risk_ready,
             now=now,
         )
 
@@ -155,6 +158,7 @@ class DailyHardwarePolicy:
         incomplete_ratio: float,
         fatigue_active: bool,
         dry_active: bool,
+        risk_ready: bool,
         now: float,
     ) -> Dict[str, Any]:
         previous = state["last_risk_status"]
@@ -179,7 +183,7 @@ class DailyHardwarePolicy:
             "incomplete_blink_ratio": round(incomplete_ratio, 3),
             "fatigue_risk": fatigue_active,
             "dry_eye_risk": dry_active,
-            "myopia_report_risk": (
+            "myopia_report_risk": risk_ready and (
                 screen_minutes >= 240.0
                 or state["distance_below_20_cm_detected"]
                 or state["continuous_distance_below_20_sec"] > 1200.0

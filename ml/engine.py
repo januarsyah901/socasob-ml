@@ -115,13 +115,13 @@ class RuleBasedFatigueDetector:
         if not metrics.is_warmed_up():
             return {
                 "type": "fatigue",
-                "status": "No Data",
-                "candidate_status": "No Data",
+                "status": "Aman",
+                "candidate_status": "Aman",
                 "composite_score": 0.0,
                 "data_quality": round(metrics.data_quality(), 2),
                 "detail": None,
-                "recommendation": "Data belum cukup untuk evaluasi.",
-                "label": "No Data",
+                "recommendation": "Pemantauan berjalan.",
+                "label": "Aman",
                 "timestamp": time.time(),
             }
         candidate, stable, detail = self.classifier.evaluate(
@@ -171,14 +171,24 @@ class RuleBasedDryEyeDetector:
         metrics: MetricsWindow = features["metrics_window"]
 
         quality = metrics.data_quality()
-        if quality < 0.70 or not metrics.is_warmed_up():
+        if quality < 0.70:
             return {
                 "type": "dry_eye",
-                "status": "No Data",
+            "status": "Aman",
                 "perclos": 0.0,
                 "avg_blink_duration": 0.0,
                 "incomplete_blink_ratio": 0.0,
                 "recommendation": "Data tidak cukup untuk evaluasi.",
+                "timestamp": time.time(),
+            }
+        if not metrics.is_warmed_up():
+            return {
+                "type": "dry_eye",
+                "status": "Aman",
+                "perclos": 0.0,
+                "avg_blink_duration": 0.0,
+                "incomplete_blink_ratio": 0.0,
+                "recommendation": "Pemantauan berjalan.",
                 "timestamp": time.time(),
             }
 
@@ -265,6 +275,26 @@ class RuleBasedMyopiaRiskModel:
         """
         guard: Dict = features.get("guard_result", {})
         risk: Dict = features.get("risk_result", {})
+        metrics: Optional[MetricsWindow] = features.get("metrics_window")
+
+        if metrics is not None and not metrics.is_warmed_up():
+            return {
+                "type": "myopia_risk",
+                "status": "Aman",
+                "distance_cm": guard.get("distance_cm"),
+                "distance_warning": False,
+                "break_state": "active",
+                "work_elapsed_sec": guard.get("work_elapsed_sec", 0),
+                "break_remaining_sec": 0,
+                "screen_time_minutes": round(risk.get("screen_time_minutes", 0.0), 1),
+                "risk_percentage": 0.0,
+                "odds_ratio": 1.0,
+                "distance_warning_count": 0,
+                "break_reminder_count": 0,
+                "warnings": [],
+                "recommendation": "Pemantauan berjalan.",
+                "timestamp": time.time(),
+            }
 
         distance_warning = guard.get("distance_warning", False)
         break_state = guard.get("break_state", "active")
@@ -375,6 +405,7 @@ class InferenceEngine:
         myopia_result = self.myopia.predict({
             "guard_result": guard_result,
             "risk_result": risk_result,
+            "metrics_window": metrics_window,
         })
 
         return {

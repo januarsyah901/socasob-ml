@@ -19,6 +19,7 @@ from collections import deque
 from typing import Deque, Dict, Optional, Tuple
 
 import numpy as np
+from config import settings
 
 
 class MetricsWindow:
@@ -108,11 +109,12 @@ class MetricsWindow:
         return min(self.window_seconds, self._valid_timestamps[-1] - self._valid_timestamps[0])
 
     def is_warmed_up(self, timestamp: Optional[float] = None) -> bool:
-        """Risiko baru dievaluasi setelah 60 detik dan minimal 5 blink valid."""
+        """Risiko baru dievaluasi setelah warm-up dan minimal 5 blink valid."""
         if self._session_start is None:
             return False
         now = self._valid_timestamps[-1] if timestamp is None and self._valid_timestamps else timestamp
-        return now is not None and now - self._session_start >= 60.0 and self._total_valid_blinks >= 5
+        warmup_seconds = getattr(settings, "RISK_WARMUP_SECONDS", 300)
+        return now is not None and now - self._session_start >= warmup_seconds and self._total_valid_blinks >= 5
 
     def smoothed_blink_rate(self) -> float:
         """
@@ -182,5 +184,5 @@ class MetricsWindow:
             "interval_variability": self.interval_variability(),
             "incomplete_blink_ratio": self.incomplete_blink_ratio(),
             "data_quality": self.data_quality(),
-            "blink_count": len(self.blink_events),
+            "blink_count": self._total_valid_blinks,
         }

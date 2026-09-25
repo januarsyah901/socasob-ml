@@ -108,6 +108,8 @@ class VisionPipelineService:
                 if frame is None or robot_id is None:
                     continue
 
+                frame = self.face_mesh.preprocess_frame(frame)
+
                 frame_size_bytes = frame_size_bytes or (frame.nbytes if frame is not None else 0)
                 frame_size_mb = round(frame_size_bytes / (1024 * 1024), 4)
                 frame_size_kb = round(frame_size_bytes / 1024, 2)
@@ -122,7 +124,7 @@ class VisionPipelineService:
                 confidence = distance_json.get("confidence", 0)
 
                 # 1. Deteksi Wajah & Landmark
-                landmarks = self.face_mesh.process(frame)
+                landmarks = self.face_mesh.process_preprocessed(frame)
                 face_detected = (landmarks is not None)
                 face_confidence = 1.0 if face_detected else 0.0
 

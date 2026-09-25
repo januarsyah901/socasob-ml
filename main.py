@@ -124,7 +124,8 @@ def run_calibration(
             time.sleep(0.01)
             continue
 
-        landmarks = face_mesh.process(frame)
+        frame = face_mesh.preprocess_frame(frame)
+        landmarks = face_mesh.process_preprocessed(frame)
         if landmarks is None:
             continue
 
@@ -194,8 +195,9 @@ def vision_pipeline_loop(
         frame_count += 1
         h, w = frame.shape[:2]
 
-        # 1. Deteksi landmark wajah
-        landmarks = face_mesh.process(frame)
+        # 1. Preprocess orientasi lalu deteksi landmark wajah
+        frame = face_mesh.preprocess_frame(frame)
+        landmarks = face_mesh.process_preprocessed(frame)
         face_detected = landmarks is not None
         face_confidence = 1.0 if face_detected else 0.0
 

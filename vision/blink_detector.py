@@ -35,7 +35,7 @@ RIGHT_EYE_OUTER: int = 263
 class EARSmoother:
     """Smoothing EAR EMA dengan histori pendek untuk menekan noise landmark."""
 
-    def __init__(self, window_size: int = 5, alpha: float = 0.5):
+    def __init__(self, window_size: int = 3, alpha: float = 0.5):
         self.values: Deque[float] = deque(maxlen=window_size)
         self.alpha = alpha
         self._value: Optional[float] = None
@@ -144,7 +144,7 @@ class BlinkEventDetector:
         ear_threshold: float = 0.21,
         min_closed_frames: int = 3,
         ear_open_threshold: float = 0.26,
-        smoothing_window: int = 5,
+        smoothing_window: int = 3,
         cooldown_frames: int = 5,
     ):
         """

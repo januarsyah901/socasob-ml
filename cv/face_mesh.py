@@ -5,6 +5,7 @@ import mediapipe as mp
 import numpy as np
 from typing import List, Tuple, Optional
 from utils.logger import get_logger
+from config import settings
 
 logger = get_logger(__name__)
 
@@ -21,7 +22,8 @@ class FaceMeshDetector:
     def __init__(self, 
                  max_num_faces: int = 1, 
                  min_detection_confidence: float = 0.5, 
-                 min_tracking_confidence: float = 0.5):
+                 min_tracking_confidence: float = 0.5,
+                 rotation_angle: Optional[int] = None):
         """
         Inisialisasi modul MediaPipe Face Mesh.
 
@@ -31,6 +33,12 @@ class FaceMeshDetector:
             min_tracking_confidence (float): Threshold minimum untuk tracking frame selanjutnya.
         """
         logger.info("Menginisialisasi MediaPipe Face Mesh...")
+        self.rotation_angle = (
+            getattr(settings, "ROTATION_ANGLE", 90)
+            if rotation_angle is None else rotation_angle
+        ) % 360
+        if self.rotation_angle not in (0, 90, 180, 270):
+            raise ValueError("rotation_angle harus 0, 90, 180, atau 270 derajat")
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=max_num_faces,
@@ -39,7 +47,17 @@ class FaceMeshDetector:
             min_tracking_confidence=min_tracking_confidence
         )
 
-    def process(self, frame: np.ndarray) -> Optional[List[Tuple[float, float]]]:
+    def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Putar frame sebelum Face Mesh dan kembalikan frame hasil preprocessing."""
+        if frame is None or self.rotation_angle == 0:
+            return frame
+        if self.rotation_angle == 90:
+            return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        if self.rotation_angle == 180:
+            return cv2.rotate(frame, cv2.ROTATE_180)
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    def process_preprocessed(self, frame: np.ndarray) -> Optional[List[Tuple[float, float]]]:
         """
         Melakukan inference Face Mesh pada frame gambar.
 
@@ -69,6 +87,10 @@ class FaceMeshDetector:
         landmarks = [(lm.x, lm.y) for lm in face_landmarks.landmark]
         
         return landmarks
+
+    def process(self, frame: np.ndarray) -> Optional[List[Tuple[float, float]]]:
+        """Kompatibilitas API: preprocess frame lalu jalankan Face Mesh."""
+        return self.process_preprocessed(self.preprocess_frame(frame))
         
     def release(self) -> None:
         """

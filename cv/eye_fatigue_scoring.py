@@ -14,6 +14,7 @@ from collections import deque
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple
 from vision.blink_detector import EARSmoother
+from config import settings
 
 
 class EyeState(Enum):
@@ -46,7 +47,7 @@ class BlinkEventDetector:
         self.min_closed_frames = max(min_closed_frames, 3)
         self.cooldown_frames = 5
         self.cooldown_remaining = 0
-        self.smoother = EARSmoother(window_size=5)
+        self.smoother = EARSmoother(window_size=3)
         self.fps = fps
 
         self.state = EyeState.OPEN
@@ -174,7 +175,8 @@ class MetricsWindow:
         if self._session_start is None:
             return False
         now = self._valid_timestamps[-1] if timestamp is None and self._valid_timestamps else timestamp
-        return now is not None and now - self._session_start >= 60.0 and self._total_valid_blinks >= 5
+        warmup_seconds = getattr(settings, "RISK_WARMUP_SECONDS", 300)
+        return now is not None and now - self._session_start >= warmup_seconds and self._total_valid_blinks >= 5
 
     def smoothed_blink_rate(self) -> float:
         raw = self.raw_blink_rate_per_minute()

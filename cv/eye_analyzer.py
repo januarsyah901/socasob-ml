@@ -109,7 +109,7 @@ class EyeConditionAnalyzer:
                 self.window, baseline_rate=self.baseline_rate
             )
         else:
-            candidate_status, stable_status, detail = SystemStatus.NO_DATA, SystemStatus.NO_DATA, None
+            candidate_status, stable_status, detail = SystemStatus.AMAN, SystemStatus.AMAN, None
 
         # 4. Petakan stable_status ke health_status, conditions, dan recommendations
         status_str, conditions, recommendations = self._map_status_details(stable_status, detail)
@@ -119,7 +119,7 @@ class EyeConditionAnalyzer:
             "blink_event": blink_event,
             "incomplete": incomplete_blink,
             "incomplete_blink_ratio": round(self.window.incomplete_blink_ratio(), 3),
-            "blink_count": len(self.window.blink_events),
+            "blink_count": self.lifetime_blinks,
             "lifetime_blinks": self.lifetime_blinks,
             "raw_blink_rate": round(self.window.raw_blink_rate_per_minute(), 2),
             "smoothed_blink_rate": round(detail["rate"], 2) if detail else round(self.window.smoothed_blink_rate(), 2),

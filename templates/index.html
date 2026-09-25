@@ -255,8 +255,9 @@ footer{border-top:1px solid var(--border);margin-top:2rem;padding:1.5rem 1rem;te
         <span class="label">Kesehatan netra</span>
         <div id="fat-value" class="big" style="color:var(--text-muted)">Tidak Terhubung</div>
         <p id="fat-desc" class="desc">Menunggu data pertama dari robot.</p>
-        <div class="divider" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem;text-align:center">
+        <div class="divider" style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;text-align:center">
           <div><div class="label">PERCLOS</div><div style="font-weight:800"><span id="perclos-value">0.0</span>%</div></div>
+          <div><div class="label">Total blink</div><div style="font-weight:800" id="blink-total">0</div></div>
           <div><div class="label">Blink/min</div><div style="font-weight:800" id="blink-rate">0.0</div></div>
           <div><div class="label">EAR</div><div style="font-weight:800" id="ear-value">0.000</div></div>
         </div>
@@ -475,6 +476,7 @@ if (resetBtn) {
       $('break-pill').style.display = 'none';
 
       $('perclos-value').textContent = '0.0';
+      $('blink-total').textContent = '0';
       $('blink-rate').textContent = '0.0';
       $('ear-value').textContent = '0.000';
       $('ear-bar').style.width = '0%';
@@ -608,6 +610,7 @@ fetch(url).then(r=>{if(!r.ok)throw 0;return r.json();}).then(res=>{
   cb.style.background = conf >= 85 ? 'var(--color-success)' : conf >= 65 ? 'var(--color-warning)' : 'var(--color-error)';
   // perclos/blink/ear
   $('perclos-value').textContent=((d.perclos||0)*100).toFixed(1);
+  $('blink-total').textContent=Number(d.blink_count ?? d.lifetime_blinks ?? 0);
   $('blink-rate').textContent=Number(d.blink_rate||0).toFixed(1);
   const ear=Number(d.ear||0);$('ear-value').textContent=ear.toFixed(3);
   $('eye-status').textContent=d.eye_status||'N/A';

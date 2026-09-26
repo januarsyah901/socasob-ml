@@ -160,9 +160,15 @@ class VisionPipelineService:
                     distance = "Dekat" if distance_cm < 30.0 else "Jauh"
 
                 # 2. Analisis Kondisi Mata
+                blink_confidence = face_confidence
+                if (
+                    distance_cm is not None
+                    and distance_cm > getattr(settings, "MAX_BLINK_DISTANCE_CM", 75.0)
+                ):
+                    blink_confidence = 0.0
                 blink_event, metrics_dict = self.eye_analyzer.process_frame(
                     ear_value=avg_ear,
-                    face_confidence=face_confidence,
+                    face_confidence=blink_confidence,
                     timestamp=current_time
                 )
                 smoothed_ear = avg_ear

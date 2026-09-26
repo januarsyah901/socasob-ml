@@ -214,15 +214,20 @@ def vision_pipeline_loop(
             # 3. Estimasi jarak
             distance_cm = distance_estimator.estimate(landmarks, w, h)
 
-        # 4. Update detector lalu catat PERCLOS dari state hasil smoothing.
-        is_valid = face_confidence >= 0.5
-        blink_event = blink_detector.update(avg_ear, face_confidence, now)
+        # 4. Jarak terlalu jauh tidak dipakai untuk blink/PERCLOS.
+        blink_confidence = face_confidence
+        if (
+            distance_cm is not None
+            and distance_cm > getattr(settings, "MAX_BLINK_DISTANCE_CM", 75.0)
+        ):
+            blink_confidence = 0.0
+        blink_event = blink_detector.update(avg_ear, blink_confidence, now)
         if blink_event:
             metrics_window.add_blink(blink_event)
         metrics_window.add_frame(
             now,
-            is_closed=is_valid and blink_detector.state.value == "closed",
-            is_valid=is_valid,
+            is_closed=blink_confidence >= 0.5 and blink_detector.state.value == "closed",
+            is_valid=blink_confidence >= 0.5,
         )
 
         # 5. Update laporan screen time kumulatif.

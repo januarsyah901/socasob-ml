@@ -36,6 +36,7 @@ WEBCAM_INDEX = int(os.getenv("WEBCAM_INDEX", 0))
 # ==========================================
 ROTATION_ANGLE = int(os.getenv("ROTATION_ANGLE", "90"))
 RISK_WARMUP_SECONDS = int(os.getenv("RISK_WARMUP_SECONDS", "300"))
+MAX_BLINK_DISTANCE_CM = float(os.getenv("MAX_BLINK_DISTANCE_CM", "75"))
 
 # Threshold untuk Eye Aspect Ratio (EAR) yang dianggap "mata tertutup"
 EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", 0.23))

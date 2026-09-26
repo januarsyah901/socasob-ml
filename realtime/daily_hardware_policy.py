@@ -46,6 +46,7 @@ class DailyHardwarePolicy:
         risk_ready: bool = True,
         valid_observation_time: Optional[float] = None,
         now: Optional[float] = None,
+        looking_at_screen: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Accumulate one observation and return the prioritized final command."""
         state = self.get_robot_state(robot_id)
@@ -85,7 +86,14 @@ class DailyHardwarePolicy:
         while state["blink_events"] and state["blink_events"][0][0] < cutoff:
             state["blink_events"].popleft()
 
-        return self._evaluate(state, now, valid_observation_time, risk_ready, face_detected)
+        return self._evaluate(
+            state,
+            now,
+            valid_observation_time,
+            risk_ready,
+            face_detected,
+            looking_at_screen,
+        )
 
     def _evaluate(
         self,
@@ -94,6 +102,7 @@ class DailyHardwarePolicy:
         valid_observation_time: Optional[float] = None,
         risk_ready: bool = True,
         face_detected: bool = False,
+        looking_at_screen: Optional[bool] = None,
     ) -> Dict[str, Any]:
         if (
             risk_ready
@@ -105,8 +114,10 @@ class DailyHardwarePolicy:
 
         break_remaining = 0.0
         if state["break_active"]:
-            if face_detected:
+            break_qualifies = not face_detected or looking_at_screen is False
+            if not break_qualifies:
                 state["break_start_time"] = None
+                break_remaining = 20.0
             else:
                 if state["break_start_time"] is None:
                     state["break_start_time"] = now

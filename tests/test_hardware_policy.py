@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 
 from camera.esp32_camera import decode_websocket_packet
+from cv.eye_landmarks import is_looking_at_screen
 from realtime.daily_hardware_policy import DailyHardwarePolicy
 from services.robot_trigger_service import RobotTriggerService
 
@@ -71,7 +72,7 @@ def test_break_requires_twenty_seconds_without_face():
 
     still_facing = policy.update("r1", True, 100.0, False, False, now=1210.0)
     assert still_facing["hardware_command"] == "20"
-    assert still_facing["break_remaining_sec"] == 0.0
+    assert still_facing["break_remaining_sec"] == 20.0
 
     incomplete_break = policy.update("r1", False, None, False, False, now=1215.0)
     assert incomplete_break["hardware_command"] == "20"
@@ -80,6 +81,52 @@ def test_break_requires_twenty_seconds_without_face():
     completed_break = policy.update("r1", False, None, False, False, now=1235.0)
     assert completed_break["hardware_command"] == "normal"
     assert completed_break["break_remaining_sec"] == 0.0
+
+
+def test_break_counts_gaze_away_and_restarts_when_looking_at_screen():
+    policy = DailyHardwarePolicy()
+    policy.update("r1", True, 100.0, False, False, now=0.0)
+    policy.update("r1", True, 100.0, False, False, now=1200.0)
+
+    away = policy.update(
+        "r1", True, 100.0, False, False, looking_at_screen=False, now=1201.0
+    )
+    assert away["break_remaining_sec"] == 20.0
+
+    halfway = policy.update(
+        "r1", True, 100.0, False, False, looking_at_screen=False, now=1211.0
+    )
+    assert halfway["break_remaining_sec"] == 10.0
+
+    interrupted = policy.update(
+        "r1", True, 100.0, False, False, looking_at_screen=True, now=1212.0
+    )
+    assert interrupted["hardware_command"] == "20"
+    assert interrupted["break_remaining_sec"] == 20.0
+
+    restarted = policy.update(
+        "r1", True, 100.0, False, False, looking_at_screen=False, now=1213.0
+    )
+    assert restarted["break_remaining_sec"] == 20.0
+
+
+def test_gaze_classifier_uses_iris_position():
+    landmarks = [(0.0, 0.0)] * 478
+    landmarks[33] = (0.3, 0.5)
+    landmarks[133] = (0.4, 0.5)
+    landmarks[159] = (0.35, 0.48)
+    landmarks[145] = (0.35, 0.52)
+    landmarks[468] = (0.35, 0.5)
+    landmarks[362] = (0.6, 0.5)
+    landmarks[263] = (0.7, 0.5)
+    landmarks[386] = (0.65, 0.48)
+    landmarks[374] = (0.65, 0.52)
+    landmarks[473] = (0.65, 0.5)
+
+    assert is_looking_at_screen(landmarks) is True
+    landmarks[468] = (0.302, 0.5)
+    assert is_looking_at_screen(landmarks) is False
+    assert is_looking_at_screen(landmarks[:468]) is None
 
 
 def test_dry_eye_wins_over_fatigue():

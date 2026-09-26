@@ -14,7 +14,7 @@ class FaceMeshDetector:
     Wrapper untuk MediaPipe Face Mesh.
     
     Kelas ini bertanggung jawab murni untuk menginisialisasi model MediaPipe
-    dan melakukan inference pada frame BGR untuk mendeteksi 468 titik landmark wajah.
+    dan melakukan inference pada frame BGR untuk mendeteksi landmark wajah dan iris.
     Sesuai prinsip Dependency Inversion, kelas ini tidak tahu-menahu soal
     sumber kamera atau bagaimana visualisasinya nanti.
     """
@@ -42,7 +42,7 @@ class FaceMeshDetector:
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=max_num_faces,
-            refine_landmarks=False,  # Set False untuk membatasi ke 468 titik standar
+            refine_landmarks=True,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence
         )
@@ -65,7 +65,7 @@ class FaceMeshDetector:
             frame (np.ndarray): Matriks gambar BGR dari kamera.
 
         Returns:
-            Optional[List[Tuple[float, float]]]: Daftar 468 koordinat (x, y) dalam format 
+            Optional[List[Tuple[float, float]]]: Daftar koordinat (x, y) dalam format
             ternormalisasi [0.0, 1.0]. Mengembalikan None jika wajah tidak terdeteksi.
         """
         if frame is None:

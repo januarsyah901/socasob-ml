@@ -7,7 +7,7 @@ import cv2
 from typing import Optional, Dict, Any, Tuple
 
 from cv.face_mesh import FaceMeshDetector
-from cv.eye_landmarks import extract_eye_coordinates
+from cv.eye_landmarks import extract_eye_coordinates, is_looking_at_screen
 from cv.ear import calculate_ear
 from cv.eye_analyzer import EyeConditionAnalyzer
 from cv.feature_extractor import FeatureExtractor
@@ -126,6 +126,9 @@ class VisionPipelineService:
                 # 1. Deteksi Wajah & Landmark
                 landmarks = self.face_mesh.process_preprocessed(frame)
                 face_detected = (landmarks is not None)
+                looking_at_screen = (
+                    is_looking_at_screen(landmarks) if face_detected else None
+                )
                 face_confidence = 1.0 if face_detected else 0.0
 
                 left_eye, right_eye = None, None
@@ -198,6 +201,7 @@ class VisionPipelineService:
                     incomplete_blink=incomplete_blink,
                     risk_ready=risk_ready,
                     valid_observation_time=self.eye_analyzer.window.valid_observation_time(),
+                    looking_at_screen=looking_at_screen,
                 )
                 hw_payload = hw_policy_results
                 trigger_text = hw_payload["hardware_command"]

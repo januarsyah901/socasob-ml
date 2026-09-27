@@ -59,15 +59,11 @@ class DailyHardwarePolicy:
 
         if face_detected:
             state["screen_duration_sec"] += delta
-            if not state["break_active"]:
-                state["continuous_gaze_sec"] += delta
-                state["away_sec"] = 0.0
-        else:
-            if not state["break_active"]:
-                state["away_sec"] = state.get("away_sec", 0.0) + delta
-                # Jika user berpaling / tidak terdeteksi lebih dari 20 detik, baru reset timer 20 menit
-                if state["away_sec"] >= 20.0:
-                    state["continuous_gaze_sec"] = 0.0
+
+        # Timer 20 menit (continuous_gaze_sec) selalu bertambah setiap frame,
+        # berjalan terus-menerus mengabaikan wajah terdeteksi atau tidak.
+        if not state["break_active"]:
+            state["continuous_gaze_sec"] += delta
 
         if face_detected and distance_cm is not None:
             if distance_cm < 50.0:
@@ -109,9 +105,10 @@ class DailyHardwarePolicy:
         face_detected: bool = False,
         looking_at_screen: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        # Jika sudah 20 menit berjalan, aktifkan peringatan istirahat 20 detik.
+        # Berjalan mandiri tanpa mempedulikan risk_ready
         if (
-            risk_ready
-            and not state["break_active"]
+            not state["break_active"]
             and state["continuous_gaze_sec"] >= 1200.0
         ):
             state["break_active"] = True
@@ -119,20 +116,17 @@ class DailyHardwarePolicy:
 
         break_remaining = 0.0
         if state["break_active"]:
-            break_qualifies = not face_detected or looking_at_screen is False
-            if not break_qualifies:
+            if state["break_start_time"] is None:
+                state["break_start_time"] = now
+            elapsed_break = now - state["break_start_time"]
+            break_remaining = max(0.0, 20.0 - elapsed_break)
+            
+            # Jika jeda 20 detik sudah habis, ulangi siklus dari awal (0)
+            if elapsed_break >= 20.0:
+                state["break_active"] = False
                 state["break_start_time"] = None
-                break_remaining = 20.0
-            else:
-                if state["break_start_time"] is None:
-                    state["break_start_time"] = now
-                elapsed_break = now - state["break_start_time"]
-                break_remaining = max(0.0, 20.0 - elapsed_break)
-                if elapsed_break >= 20.0:
-                    state["break_active"] = False
-                    state["break_start_time"] = None
-                    state["continuous_gaze_sec"] = 0.0
-                    break_remaining = 0.0
+                state["continuous_gaze_sec"] = 0.0
+                break_remaining = 0.0
 
         screen_minutes = state["screen_duration_sec"] / 60.0
         fatigue_active = risk_ready and (

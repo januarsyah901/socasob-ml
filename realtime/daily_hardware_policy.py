@@ -20,6 +20,7 @@ class DailyHardwarePolicy:
                 "date": today,
                 "screen_duration_sec": 0.0,
                 "continuous_gaze_sec": 0.0,
+                "away_sec": 0.0,
                 "continuous_distance_below_50_sec": 0.0,
                 "continuous_distance_below_20_sec": 0.0,
                 "distance_below_20_cm_detected": False,
@@ -60,9 +61,13 @@ class DailyHardwarePolicy:
             state["screen_duration_sec"] += delta
             if not state["break_active"]:
                 state["continuous_gaze_sec"] += delta
+                state["away_sec"] = 0.0
         else:
             if not state["break_active"]:
-                state["continuous_gaze_sec"] = 0.0
+                state["away_sec"] = state.get("away_sec", 0.0) + delta
+                # Jika user berpaling / tidak terdeteksi lebih dari 20 detik, baru reset timer 20 menit
+                if state["away_sec"] >= 20.0:
+                    state["continuous_gaze_sec"] = 0.0
 
         if face_detected and distance_cm is not None:
             if distance_cm < 50.0:

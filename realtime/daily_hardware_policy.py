@@ -139,7 +139,7 @@ class DailyHardwarePolicy:
                 break_remaining = 0.0
 
         screen_minutes = state["screen_duration_sec"] / 60.0
-        fatigue_active = risk_ready and (
+        fatigue_active = (
             screen_minutes > 360.0
             or state["continuous_distance_below_50_sec"] >= 10.0
         )
@@ -161,7 +161,7 @@ class DailyHardwarePolicy:
         incomplete_ratio = (
             incomplete_window / total_window if total_window >= 5 else 0.0
         )
-        dry_active = risk_ready and (
+        dry_active = (
             screen_minutes > 360.0
             or (valid_window_seconds >= 60.0 and blink_rate <= 10.0)
         )
@@ -173,8 +173,6 @@ class DailyHardwarePolicy:
 
         if state["break_active"]:
             command = "20"
-        elif not risk_ready:
-            command = "normal"
         elif state["continuous_gaze_sec"] > 1200.0:
             command = "20"
         elif dry_active:

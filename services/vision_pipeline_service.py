@@ -2,6 +2,7 @@
 
 import threading
 import time
+import statistics
 import numpy as np
 import cv2
 from typing import Optional, Dict, Any, Tuple
@@ -67,6 +68,7 @@ class VisionPipelineService:
         self.frames_by_robot: Dict[str, np.ndarray] = {}
         self.features_by_robot: Dict[str, Dict[str, Any]] = {}
         self.last_frame_time_by_robot: Dict[str, float] = {}
+        self.distance_buffers: Dict[str, list] = {}
         self.lock = threading.Lock()
 
         self.is_running = False
@@ -146,14 +148,27 @@ class VisionPipelineService:
                     estimated_distance_cm = self.distance_estimator.estimate(landmarks, w, h)
 
                 # Prioritas distance_cm: dari sensor robot jika ada, atau estimasi CV vision
-                distance_cm = distance_json.get("distance_cm")
-                if distance_cm is None and "distance_mm" in distance_json:
+                raw_distance_cm = distance_json.get("distance_cm")
+                if raw_distance_cm is None and "distance_mm" in distance_json:
                     try:
-                        distance_cm = round(float(distance_json["distance_mm"]) / 10.0, 1)
+                        raw_distance_cm = float(distance_json["distance_mm"]) / 10.0
                     except (ValueError, TypeError):
                         pass
-                if distance_cm is None:
-                    distance_cm = estimated_distance_cm
+                if raw_distance_cm is None:
+                    raw_distance_cm = estimated_distance_cm
+
+                distance_cm = None
+                if raw_distance_cm is not None:
+                    buffer = self.distance_buffers.setdefault(robot_id or "default", [])
+                    buffer.append(raw_distance_cm)
+                    
+                    # Simpan 5 nilai terakhir 
+                    if len(buffer) > 5:
+                        buffer.pop(0)
+                        
+                    # Mengambil nilai minimum dari 5 frame terakhir 
+                    # karena noise sensor selalu melebih-lebihkan jarak (tidak pernah di bawah nilai aktual)
+                    distance_cm = round(min(buffer), 1)
 
                 # Update jarak jika estimasi tersedia dan sensor robot belum kirim status eksplisit
                 if distance_cm is not None and "distance" not in distance_json:

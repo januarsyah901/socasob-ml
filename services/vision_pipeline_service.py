@@ -221,12 +221,12 @@ class VisionPipelineService:
 
                 # 4. ML policy adalah satu-satunya pembuat command hardware.
                 risk_ready = metrics_dict.get("warmup_complete", False)
-                incomplete_blink = bool(risk_ready and blink_event and metrics_dict.get("incomplete", False))
+                incomplete_blink = bool(blink_event and metrics_dict.get("incomplete", False))
                 hw_policy_results = self.daily_policy.update(
                     robot_id=robot_id,
                     face_detected=face_detected,
                     distance_cm=distance_cm,
-                    blink_event=bool(risk_ready and blink_event),
+                    blink_event=blink_event,
                     incomplete_blink=incomplete_blink,
                     risk_ready=risk_ready,
                     valid_observation_time=self.eye_analyzer.window.valid_observation_time(),

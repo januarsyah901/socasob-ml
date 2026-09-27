@@ -59,6 +59,9 @@ class DailyHardwarePolicy:
 
         if face_detected:
             state["screen_duration_sec"] += delta
+            state["away_sec"] = 0.0
+        else:
+            state["away_sec"] = state.get("away_sec", 0.0) + delta
 
         # Timer 20 menit (continuous_gaze_sec) selalu bertambah setiap frame,
         # berjalan terus-menerus mengabaikan wajah terdeteksi atau tidak.
@@ -68,16 +71,23 @@ class DailyHardwarePolicy:
         if face_detected and distance_cm is not None:
             if distance_cm < 50.0:
                 state["continuous_distance_below_50_sec"] += delta
+                state["distance_safe_sec"] = 0.0
             else:
-                state["continuous_distance_below_50_sec"] = 0.0
+                state["distance_safe_sec"] = state.get("distance_safe_sec", 0.0) + delta
+                if state["distance_safe_sec"] >= 3.0:  # Butuh 3 detik di atas 50cm baru reset
+                    state["continuous_distance_below_50_sec"] = 0.0
+                    
             if distance_cm < 20.0:
                 state["continuous_distance_below_20_sec"] += delta
                 state["distance_below_20_cm_detected"] = True
             else:
                 state["continuous_distance_below_20_sec"] = 0.0
         else:
-            state["continuous_distance_below_50_sec"] = 0.0
-            state["continuous_distance_below_20_sec"] = 0.0
+            # Jika wajah tidak terdeteksi, jangan langsung reset timer jarak dekatnya
+            # Biarkan saja paused sementara, kecuali user benar-benar pergi (away_sec >= 10s)
+            if state.get("away_sec", 0.0) >= 10.0:
+                state["continuous_distance_below_50_sec"] = 0.0
+                state["continuous_distance_below_20_sec"] = 0.0
 
         if risk_ready and blink_event and not state["break_active"]:
             state["total_blinks"] += 1

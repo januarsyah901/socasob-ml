@@ -163,7 +163,7 @@ class DailyHardwarePolicy:
         )
         dry_active = risk_ready and (
             screen_minutes > 360.0
-            or (total_window >= 5 and valid_window_seconds >= 60.0 and blink_rate <= 10.0)
+            or (valid_window_seconds >= 60.0 and blink_rate <= 10.0)
         )
         fatigue_escalated = (
             fatigue_active

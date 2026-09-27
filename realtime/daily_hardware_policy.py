@@ -158,7 +158,7 @@ class DailyHardwarePolicy:
         fatigue_escalated = (
             fatigue_active
             and state["fatigue_start_time"] is not None
-            and now - state["fatigue_start_time"] >= 600.0
+            and now - state["fatigue_start_time"] >= 120.0
         )
 
         if state["break_active"]:

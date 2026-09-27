@@ -105,11 +105,11 @@ class DailyHardwarePolicy:
         face_detected: bool = False,
         looking_at_screen: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        # Jika sudah 20 menit berjalan, aktifkan peringatan istirahat 20 detik.
+        # Jika sudah 2 menit berjalan (UNTUK TESTING), aktifkan peringatan istirahat 20 detik.
         # Berjalan mandiri tanpa mempedulikan risk_ready
         if (
             not state["break_active"]
-            and state["continuous_gaze_sec"] >= 1200.0
+            and state["continuous_gaze_sec"] >= 120.0  # UBAH KEMBALI KE 1200.0 UNTUK PRODUCTION (20 menit)
         ):
             state["break_active"] = True
             state["break_start_time"] = None

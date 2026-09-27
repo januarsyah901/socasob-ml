@@ -154,6 +154,10 @@ class VisionPipelineService:
                         raw_distance_cm = float(distance_json["distance_mm"]) / 10.0
                     except (ValueError, TypeError):
                         pass
+                        
+                # Log nilai mentah untuk keperluan debugging
+                logger.debug(f"DEBUG DISTANCE: robot_id={robot_id}, raw_hw={raw_distance_cm} cm, cv_est={estimated_distance_cm} cm, json={distance_json}")
+                
                 if raw_distance_cm is None:
                     raw_distance_cm = estimated_distance_cm
 
@@ -166,9 +170,13 @@ class VisionPipelineService:
                     if len(buffer) > 5:
                         buffer.pop(0)
                         
-                    # Mengambil nilai minimum dari 5 frame terakhir 
-                    # karena noise sensor selalu melebih-lebihkan jarak (tidak pernah di bawah nilai aktual)
-                    distance_cm = round(min(buffer), 1)
+                    # Kembali gunakan median filter karena sepertinya ada noise nilai kecil (di bawah angka aktual) 
+                    # yang tertangkap oleh minimum filter dan ditahan selama 5 frame.
+                    import statistics
+                    distance_cm = round(statistics.median(buffer), 1)
+                    
+                    # Kompensasi hardware: sensor rata-rata melebih-lebihkan +5 cm dari jarak asli
+                    distance_cm = max(0.0, distance_cm - 5.0)
 
                 # Update jarak jika estimasi tersedia dan sensor robot belum kirim status eksplisit
                 if distance_cm is not None and "distance" not in distance_json:

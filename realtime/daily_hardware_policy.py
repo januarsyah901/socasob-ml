@@ -171,7 +171,9 @@ class DailyHardwarePolicy:
             and now - state["fatigue_start_time"] >= 120.0
         )
 
-        if state["break_active"]:
+        if not risk_ready:
+            command = "normal"
+        elif state["break_active"]:
             command = "20"
         elif state["continuous_gaze_sec"] > 1200.0:
             command = "20"

@@ -235,6 +235,18 @@ class VisionPipelineService:
                 hw_payload = hw_policy_results
                 trigger_text = hw_payload["hardware_command"]
 
+                # Cek manual override
+                if self.trigger_service is not None and self.trigger_service.is_in_manual_override(robot_id):
+                    override_meta = self.trigger_service.get_override_payload(robot_id)
+                    if override_meta:
+                        trigger_text = override_meta.get("trigger", trigger_text)
+                        hw_payload["hardware_command"] = trigger_text
+                        hw_payload["lcd_command"] = override_meta.get("lcd_command", hw_payload.get("lcd_command", "normal"))
+                        hw_payload["speaker_command"] = override_meta.get("speaker_command", hw_payload.get("speaker_command", "none"))
+                        hw_payload["lcd_label"] = override_meta.get("lcd_label", hw_payload.get("lcd_label", ""))
+                        hw_payload["speaker_label"] = override_meta.get("speaker_label", hw_payload.get("speaker_label", ""))
+                        hw_payload["robot_trigger"] = trigger_text
+
                 # Kirim trigger pesan teks ke robot jika trigger service aktif
                 if self.trigger_service is not None and robot_id:
                     self.trigger_service.send_trigger(robot_id, trigger_text)

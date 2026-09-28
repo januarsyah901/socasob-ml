@@ -89,7 +89,7 @@ class DailyHardwarePolicy:
                 state["continuous_distance_below_50_sec"] = 0.0
                 state["continuous_distance_below_20_sec"] = 0.0
 
-        if risk_ready and blink_event and not state["break_active"]:
+        if blink_event and not state["break_active"]:
             state["total_blinks"] += 1
             state["incomplete_blinks"] += int(incomplete_blink)
             state["blink_events"].append((now, bool(incomplete_blink)))
@@ -163,7 +163,7 @@ class DailyHardwarePolicy:
         )
         dry_active = (
             screen_minutes > 360.0
-            or (valid_window_seconds >= 60.0 and blink_rate <= 10.0)
+            or (valid_window_seconds >= 55.0 and blink_rate <= 10.0)
         )
         fatigue_escalated = (
             fatigue_active
@@ -221,6 +221,27 @@ class DailyHardwarePolicy:
                 "10": "fatigue_10m",
                 "dry": "dry_eye",
                 "20": "break_20m",
+            }[command],
+            "speaker_command": {
+                "normal": "none",
+                "5": "none",
+                "10": "bip-bip",
+                "dry": "pop-pop",
+                "20": "ting-tong",
+            }[command],
+            "lcd_label": {
+                "normal": "Muka Normal (Kedip Normal)",
+                "5": "Muka Sayu (Terdeteksi Mata Lelah Awal)",
+                "10": "Muka Kesal/Tajam (Terdeteksi Mata Lelah > 10 Menit)",
+                "dry": "Muka Kecewa/Sipit (Terdeteksi Mata Kering)",
+                "20": "Muka Senang (Peringatan Istirahat 20 Detik)",
+            }[command],
+            "speaker_label": {
+                "normal": "Tidak Bersuara",
+                "5": "Tidak Bersuara",
+                "10": "Suara 'bip-bip' (Peringatan Mata Lelah)",
+                "dry": "Suara 'pop-pop' (Deteksi Mata Kering)",
+                "20": "Suara 'ting-tong' (Pengingat Istirahat)",
             }[command],
             "screen_time_minutes": round(screen_minutes, 2),
             "continuous_gaze_minutes": round(state["continuous_gaze_sec"] / 60.0, 2),
